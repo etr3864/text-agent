@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { supabaseService } from './supabase-service';
+import { loadConversationCache, saveConversationCache } from './utils';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/chat';
 
@@ -70,8 +71,26 @@ class ApiService {
     conversationId?: string;
     userPhone: string;
   }) {
-    const response = await this.api.post('/send', request);
-    return response.data;
+    // Load cache and include conversationId if missing
+    const cache = loadConversationCache(request.userPhone);
+    const conversationId = request.conversationId || cache?.conversationId;
+
+    const response = await this.api.post('/send', { ...request, conversationId });
+    const data = response.data;
+
+    // Update cache with new messages
+    try {
+      const existing = loadConversationCache(request.userPhone) || { messages: [], updatedAt: Date.now() } as any;
+      const convoId = data?.conversationId || conversationId;
+      const userMsg = { role: 'user' as const, content: request.message, timestamp: Date.now() };
+      const assistantMsg = data?.message?.content
+        ? { role: 'assistant' as const, content: data.message.content, timestamp: Date.now() }
+        : null;
+      const messages = assistantMsg ? [...(existing.messages || []), userMsg, assistantMsg] : [...(existing.messages || []), userMsg];
+      saveConversationCache(request.userPhone, { conversationId: convoId, messages, updatedAt: Date.now() });
+    } catch {}
+
+    return data;
   }
 
   // System prompts - Direct Supabase calls

@@ -3,9 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppController = void 0;
 const wasender_service_js_1 = require("../services/wasender.service.js");
 const supabase_service_js_1 = require("../services/supabase.service.js");
+const ai_service_js_1 = require("../services/ai.service.js");
 class WhatsAppController {
     constructor() {
         this.supabase = new supabase_service_js_1.SupabaseService();
+        this.aiService = new ai_service_js_1.AIService();
     }
     normalizePhoneNumber(input) {
         let digits = (input || '').replace(/\D+/g, '');
@@ -29,7 +31,7 @@ class WhatsAppController {
             console.log('Received WhatsApp webhook:', JSON.stringify(payload));
             const event = payload?.event;
             const data = payload?.data;
-            if (event === 'messages.upsert' && data?.messages) {
+            if ((event === 'messages.upsert' || event === 'messages.received') && data?.messages) {
                 const msg = data.messages;
                 const message = Array.isArray(msg) ? msg[0] : msg;
                 if (message?.key?.fromMe) {
@@ -37,7 +39,66 @@ class WhatsAppController {
                     res.status(200).json({ ok: true });
                     return;
                 }
-                console.log('Incoming message:', message?.message || message?.text || message);
+                const text = message?.message?.conversation ||
+                    message?.conversation ||
+                    message?.text?.body ||
+                    message?.message?.extendedTextMessage?.text ||
+                    '';
+                const remoteJid = message?.key?.remoteJid || message?.from || '';
+                const digitsOnly = (remoteJid || '').replace(/\D+/g, '');
+                let senderPhone = digitsOnly;
+                if (senderPhone) {
+                    senderPhone = this.normalizePhoneNumber(senderPhone);
+                }
+                console.log('Incoming message (parsed):', { text, senderPhone });
+                if (!text || !senderPhone || !/^972[0-9]{9}$/.test(senderPhone)) {
+                    console.warn('Webhook message missing text or valid sender phone');
+                    res.status(200).json({ ok: true });
+                    return;
+                }
+                const userWithPrompt = await this.supabase.getUserWithSystemPromptByPhone(senderPhone);
+                const systemPrompt = userWithPrompt?.systemPrompt?.prompt;
+                const aiResponse = await this.aiService.generateResponse([{ role: 'user', content: text }], systemPrompt ? { systemPrompt } : undefined);
+                const replyText = aiResponse?.content?.trim();
+                if (replyText && replyText.length > 0) {
+                    await wasender_service_js_1.wasenderService.sendMessage(senderPhone, replyText);
+                    if (userWithPrompt?.user?.id) {
+                        await this.supabase.updateUserWhatsAppStatus(userWithPrompt.user.id, 'active');
+                    }
+                }
+            }
+            if (event === 'chats.update' && data?.chats) {
+                const chats = data.chats;
+                const firstMsg = Array.isArray(chats?.messages) ? chats.messages[0] : chats?.messages?.[0];
+                const fromMe = firstMsg?.message?.key?.fromMe;
+                if (fromMe === true) {
+                    res.status(200).json({ ok: true });
+                    return;
+                }
+                const text = firstMsg?.message?.message?.conversation ||
+                    firstMsg?.message?.conversation ||
+                    firstMsg?.message?.text?.body ||
+                    firstMsg?.message?.message?.extendedTextMessage?.text ||
+                    '';
+                const chatsId = chats?.id || '';
+                const remoteJid = chatsId || firstMsg?.message?.key?.remoteJid || '';
+                const digitsOnly = (remoteJid || '').replace(/\D+/g, '');
+                let senderPhone = digitsOnly ? this.normalizePhoneNumber(digitsOnly) : '';
+                console.log('Incoming chats.update (parsed):', { text, senderPhone });
+                if (!text || !senderPhone || !/^972[0-9]{9}$/.test(senderPhone)) {
+                    res.status(200).json({ ok: true });
+                    return;
+                }
+                const userWithPrompt = await this.supabase.getUserWithSystemPromptByPhone(senderPhone);
+                const systemPrompt = userWithPrompt?.systemPrompt?.prompt;
+                const aiResponse = await this.aiService.generateResponse([{ role: 'user', content: text }], systemPrompt ? { systemPrompt } : undefined);
+                const replyText = aiResponse?.content?.trim();
+                if (replyText && replyText.length > 0) {
+                    await wasender_service_js_1.wasenderService.sendMessage(senderPhone, replyText);
+                    if (userWithPrompt?.user?.id) {
+                        await this.supabase.updateUserWhatsAppStatus(userWithPrompt.user.id, 'active');
+                    }
+                }
             }
             res.status(200).json({ ok: true });
         }
@@ -51,6 +112,7 @@ class WhatsAppController {
             const { systemPromptId, userPhone, text } = req.body || {};
             let phoneNumber = userPhone;
             let userName;
+            let userBusinessName;
             let systemPromptText;
             if (!phoneNumber && systemPromptId) {
                 const systemPrompt = await this.supabase.getSystemPrompt(systemPromptId);
@@ -60,6 +122,7 @@ class WhatsAppController {
                     if (user && user.phone_number) {
                         phoneNumber = user.phone_number;
                         userName = user.name || undefined;
+                        userBusinessName = user.business_name || undefined;
                     }
                 }
             }
@@ -74,14 +137,12 @@ class WhatsAppController {
             }
             let messageText = text;
             if (!messageText) {
-                const snippet = (systemPromptText || '').replace(/\s+/g, ' ').slice(0, 80).trim();
-                const namePart = userName ? ` היי ${userName}!` : ' היי!';
-                if (snippet.length > 0) {
-                    messageText = `${namePart} אני הסוכנת שלך. ${snippet}... איך אפשר לעזור היום?`;
-                }
-                else {
-                    messageText = `${namePart} אני הסוכנת שלך. איך אפשר לעזור היום?`;
-                }
+                const userByPhone = await this.supabase.getUserByPhone(phoneNumber);
+                const displayName = (userByPhone?.name || userName || '').trim();
+                const businessName = (userByPhone?.business_name || userBusinessName || '').trim();
+                const helloPart = displayName ? `היי ${displayName}` : 'היי';
+                const businessPart = businessName ? ` מ${businessName}` : '';
+                messageText = `${helloPart} אני דנה${businessPart} 😊מתחילים שיחת הדמייה`;
             }
             const wasenderResponse = await wasender_service_js_1.wasenderService.sendMessage(phoneNumber, messageText);
             if (!wasenderResponse.success) {

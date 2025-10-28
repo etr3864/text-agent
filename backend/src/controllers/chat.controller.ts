@@ -5,7 +5,21 @@ import { config } from '../config/env.js';
 import axios from 'axios';
 import FormData from 'form-data';
 import { AIService } from '../services/ai.service.js';
-import * as pdfParse from 'pdf-parse';
+// Dynamic import for pdf-parse to handle both CommonJS and ESM
+let pdfParse: any = null;
+const loadPdfParse = async () => {
+  if (!pdfParse) {
+    try {
+      const pdfParseModule = await import('pdf-parse');
+      pdfParse = pdfParseModule.default || pdfParseModule;
+    } catch (e) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      pdfParse = require('pdf-parse').default || require('pdf-parse');
+    }
+  }
+  return pdfParse;
+};
+
 import { SupabaseService } from '../services/supabase.service.js';
 
 export class ChatController {
@@ -136,78 +150,109 @@ export class ChatController {
       });
     }
   }
-
-  // ================ OCR.space PDF parsing ================
+// ================ OCR.space PDF parsing ================
   async parsePdf(req: Request, res: Response): Promise<void> {
     try {
       if (!req.file) {
         res.status(400).json({ success: false, error: 'No PDF file provided' });
         return;
       }
+
+      const uploadedFile = req.file as any;
+      const pdfBuffer = uploadedFile.buffer as Buffer;
+      const originalName = (uploadedFile.originalname as string) || 'document.pdf';
+
+      // ========== PDF-PARSE (digital text) ==========
+      try {
+        const pdfParser = await loadPdfParse();
+        const parsed = await pdfParser(pdfBuffer);
+        const text = (parsed.text || '').trim();
+        const numpages = (parsed as any).numpages || 0;
+
+        if (text.length > 0) {
+          const hebrewMatches = text.match(/[\u0590-\u05FF]/g) || [];
+          const hebrewRatio = hebrewMatches.length / Math.max(text.length, 1);
+
+          if (hebrewRatio >= 0.2) {
+            res.json({ success: true, text, pages: numpages });
+            return;
+          } else {
+            console.warn('pdf-parse produced low Hebrew ratio; falling back to OCR');
+          }
+        }
+      } catch (pdfErr) {
+        console.warn('pdf-parse failed:', pdfErr instanceof Error ? pdfErr.message : pdfErr);
+      }
+
+      // ========== OCR.SPACE (scanned Hebrew PDFs) ==========
       if (!config.ocr?.apiKey) {
-        res.status(500).json({ success: false, error: 'OCR API key is missing' });
+        res.json({ success: true, text: '', pages: 0 });
         return;
       }
 
-      const pdfBuffer = req.file.buffer;
-
-      // First try OCR.space (good for scanned Hebrew)
-      try {
+      const callOcr = async (extraFields: Record<string, string | boolean> = {}) => {
         const formData = new FormData();
         formData.append('file', pdfBuffer, {
-          filename: req.file.originalname || 'document.pdf',
+          filename: originalName,
           contentType: 'application/pdf',
         } as any);
-        formData.append('language', 'heb');
         formData.append('apikey', config.ocr.apiKey);
-        formData.append('OCREngine', '1'); // Hebrew requires 1
-        formData.append('filetype', 'pdf');
+        formData.append('OCREngine', '1'); // 1 עובד טוב לרוב ה-PDFים
+        formData.append('filetype', 'PDF');
         formData.append('detectOrientation', 'true');
         formData.append('isTable', 'false');
         formData.append('scale', 'true');
 
+        for (const [k, v] of Object.entries(extraFields)) {
+          formData.append(k, String(v));
+        }
+
         const response = await axios.post('https://api.ocr.space/parse/image', formData, {
           headers: formData.getHeaders(),
           maxBodyLength: Infinity,
+          timeout: 30000,
         });
 
-        const result: any = response.data;
-        // If OCR.space reports error, surface it
-        if (result?.IsErroredOnProcessing) {
-          const message = Array.isArray(result?.ErrorMessage) ? result.ErrorMessage.join(', ') : (result?.ErrorMessage || 'OCR processing error');
-          console.warn('OCR.space error:', message);
-        }
+        return response.data as any;
+      };
 
-        let fullText = '';
-        let pages = 0;
-        if (result?.ParsedResults && Array.isArray(result.ParsedResults)) {
-          fullText = result.ParsedResults.map((p: any) => p.ParsedText || '').join('\n\n');
-          pages = result.ParsedResults.length;
-        }
-
-        if (fullText && fullText.trim().length > 0) {
-          res.json({ success: true, text: fullText, pages });
-          return;
-        }
-      } catch (ocrError) {
-        console.warn('OCR.space call failed, will try pdf-parse fallback:', ocrError instanceof Error ? ocrError.message : ocrError);
-      }
-
-      // Fallback: extract embedded text (for digital PDFs)
+      let ocrResult: any = null;
       try {
-        const parsed = await (pdfParse as any)(pdfBuffer);
-        const text = (parsed.text || '').trim();
-        const numpages = parsed.numpages || 0;
-        if (text.length > 0) {
-          res.json({ success: true, text, pages: numpages });
-          return;
+
+        ocrResult = await callOcr();
+
+        if (ocrResult?.IsErroredOnProcessing && ocrResult?.ErrorMessage) {
+          const msg = Array.isArray(ocrResult.ErrorMessage)
+              ? ocrResult.ErrorMessage.join(', ')
+              : ocrResult.ErrorMessage;
+          console.warn('OCR.space error (default):', msg);
+
+          // נסה מנוע שני עם זיהוי אוטומטי
+          ocrResult = await callOcr({ OCREngine: '2', language: 'auto' });
+
+          if (ocrResult?.IsErroredOnProcessing && ocrResult?.ErrorMessage) {
+            const msg2 = Array.isArray(ocrResult.ErrorMessage)
+                ? ocrResult.ErrorMessage.join(', ')
+                : ocrResult.ErrorMessage;
+            console.warn('OCR.space error (auto):', msg2);
+
+            // אחרון חביב – אנגלית בלבד (לפחות שלא יקרוס)
+            ocrResult = await callOcr({ language: 'eng' });
+          }
         }
-      } catch (pdfErr) {
-        console.warn('pdf-parse fallback failed:', pdfErr instanceof Error ? pdfErr.message : pdfErr);
+      } catch (ocrErr) {
+        console.warn('OCR.space call failed:', ocrErr instanceof Error ? ocrErr.message : ocrErr);
       }
 
-      // If still empty, return success with empty text so UI can handle manual paste
-      res.json({ success: true, text: '', pages: 0 });
+      let fullText = '';
+      let pages = 0;
+
+      if (ocrResult?.ParsedResults && Array.isArray(ocrResult.ParsedResults)) {
+        fullText = ocrResult.ParsedResults.map((p: any) => p.ParsedText || '').join('\n\n');
+        pages = ocrResult.ParsedResults.length;
+      }
+
+      res.json({ success: true, text: (fullText || '').trim(), pages });
     } catch (error) {
       console.error('Error parsing PDF:', error);
       res.status(500).json({ success: false, error: 'Failed to parse PDF' });
@@ -217,13 +262,38 @@ export class ChatController {
   // ================ AI endpoints ================
   async generateDynamicQuestions(req: Request, res: Response): Promise<void> {
     try {
-      const { businessName, businessField, businessGoal } = req.body || {};
+      const { businessName, businessField, businessGoal, systemPromptId, systemPromptText } = req.body || {};
       if (!businessName || !businessField || !businessGoal) {
         res.status(400).json({ success: false, error: 'Business name, field, and goal are required' });
         return;
       }
 
-      const prompt = `תבסס על המידע הבא, צור 5-8 שאלות מותאמות לבניית system prompt לסוכן AI:
+      // Resolve system prompt to guide question generation
+      let resolvedSystemPrompt: string | undefined = typeof systemPromptText === 'string' && systemPromptText.trim().length > 0
+        ? systemPromptText.trim()
+        : undefined;
+
+      if (!resolvedSystemPrompt && systemPromptId) {
+        const sp = await this.supabaseService.getSystemPrompt(systemPromptId);
+        if (sp?.prompt) {
+          resolvedSystemPrompt = sp.prompt;
+        }
+      }
+
+      if (!resolvedSystemPrompt) {
+        const def = await this.supabaseService.getDefaultSystemPrompt();
+        if (def?.prompt) {
+          resolvedSystemPrompt = def.prompt;
+        }
+      }
+
+      const prompt = `בהתבסס על ה-System Prompt הבא של הסוכנת, צור 5-8 שאלות מותאמות שיסייעו להשלים System Prompt מדויק לעסק:
+
+------ System Prompt (הקשר) ------
+${resolvedSystemPrompt || 'אתה סוכנת AI חכמה ומועילה. ענה בעברית בצורה ברורה וידידותית.'}
+----------------------------------
+
+פרטים שנאספו מהמשתמש:
 שם העסק: ${businessName}
 תחום העסק: ${businessField}
 מטרת הסוכן: ${businessGoal}
@@ -235,11 +305,16 @@ export class ChatController {
 4. מטרות השיחה
 5. כללי ברזל
 
-ענה בעברית, רק את השאלות (ללא הסבר נוסף), כל שאלה בשורה נפרדת.`;
+הנחיות פורמט:
+- ענה בעברית בלבד
+- החזר רק את רשימת השאלות, ללא טקסט נוסף
+- כל שאלה בשורה נפרדת
+- שאל רק שאלה אחת בכל שורה
+- בין 5 ל-8 שאלות בסך הכול`;
 
       const response = await this.aiService.generateResponse(
         [ { role: 'user', content: prompt } as any ],
-        { temperature: 0.7, maxTokens: 500 }
+        { temperature: 0.7, maxTokens: 500, systemPrompt: resolvedSystemPrompt }
       );
 
       const questions = response.content

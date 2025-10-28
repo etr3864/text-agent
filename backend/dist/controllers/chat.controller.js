@@ -42,7 +42,19 @@ const env_js_1 = require("../config/env.js");
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
 const ai_service_js_1 = require("../services/ai.service.js");
-const pdfParse = __importStar(require("pdf-parse"));
+let pdfParse = null;
+const loadPdfParse = async () => {
+    if (!pdfParse) {
+        try {
+            const pdfParseModule = await Promise.resolve().then(() => __importStar(require('pdf-parse')));
+            pdfParse = pdfParseModule.default || pdfParseModule;
+        }
+        catch (e) {
+            pdfParse = require('pdf-parse').default || require('pdf-parse');
+        }
+    }
+    return pdfParse;
+};
 const supabase_service_js_1 = require("../services/supabase.service.js");
 class ChatController {
     constructor() {
@@ -167,60 +179,83 @@ class ChatController {
                 res.status(400).json({ success: false, error: 'No PDF file provided' });
                 return;
             }
-            if (!env_js_1.config.ocr?.apiKey) {
-                res.status(500).json({ success: false, error: 'OCR API key is missing' });
-                return;
-            }
-            const pdfBuffer = req.file.buffer;
+            const uploadedFile = req.file;
+            const pdfBuffer = uploadedFile.buffer;
+            const originalName = uploadedFile.originalname || 'document.pdf';
             try {
-                const formData = new form_data_1.default();
-                formData.append('file', pdfBuffer, {
-                    filename: req.file.originalname || 'document.pdf',
-                    contentType: 'application/pdf',
-                });
-                formData.append('language', 'heb');
-                formData.append('apikey', env_js_1.config.ocr.apiKey);
-                formData.append('OCREngine', '1');
-                formData.append('filetype', 'pdf');
-                formData.append('detectOrientation', 'true');
-                formData.append('isTable', 'false');
-                formData.append('scale', 'true');
-                const response = await axios_1.default.post('https://api.ocr.space/parse/image', formData, {
-                    headers: formData.getHeaders(),
-                    maxBodyLength: Infinity,
-                });
-                const result = response.data;
-                if (result?.IsErroredOnProcessing) {
-                    const message = Array.isArray(result?.ErrorMessage) ? result.ErrorMessage.join(', ') : (result?.ErrorMessage || 'OCR processing error');
-                    console.warn('OCR.space error:', message);
-                }
-                let fullText = '';
-                let pages = 0;
-                if (result?.ParsedResults && Array.isArray(result.ParsedResults)) {
-                    fullText = result.ParsedResults.map((p) => p.ParsedText || '').join('\n\n');
-                    pages = result.ParsedResults.length;
-                }
-                if (fullText && fullText.trim().length > 0) {
-                    res.json({ success: true, text: fullText, pages });
-                    return;
-                }
-            }
-            catch (ocrError) {
-                console.warn('OCR.space call failed, will try pdf-parse fallback:', ocrError instanceof Error ? ocrError.message : ocrError);
-            }
-            try {
-                const parsed = await pdfParse(pdfBuffer);
+                const pdfParser = await loadPdfParse();
+                const parsed = await pdfParser(pdfBuffer);
                 const text = (parsed.text || '').trim();
                 const numpages = parsed.numpages || 0;
                 if (text.length > 0) {
-                    res.json({ success: true, text, pages: numpages });
-                    return;
+                    const hebrewMatches = text.match(/[\u0590-\u05FF]/g) || [];
+                    const hebrewRatio = hebrewMatches.length / Math.max(text.length, 1);
+                    if (hebrewRatio >= 0.2) {
+                        res.json({ success: true, text, pages: numpages });
+                        return;
+                    }
+                    else {
+                        console.warn('pdf-parse produced low Hebrew ratio; falling back to OCR');
+                    }
                 }
             }
             catch (pdfErr) {
-                console.warn('pdf-parse fallback failed:', pdfErr instanceof Error ? pdfErr.message : pdfErr);
+                console.warn('pdf-parse failed:', pdfErr instanceof Error ? pdfErr.message : pdfErr);
             }
-            res.json({ success: true, text: '', pages: 0 });
+            if (!env_js_1.config.ocr?.apiKey) {
+                res.json({ success: true, text: '', pages: 0 });
+                return;
+            }
+            const callOcr = async (extraFields = {}) => {
+                const formData = new form_data_1.default();
+                formData.append('file', pdfBuffer, {
+                    filename: originalName,
+                    contentType: 'application/pdf',
+                });
+                formData.append('apikey', env_js_1.config.ocr.apiKey);
+                formData.append('OCREngine', '1');
+                formData.append('filetype', 'PDF');
+                formData.append('detectOrientation', 'true');
+                formData.append('isTable', 'false');
+                formData.append('scale', 'true');
+                for (const [k, v] of Object.entries(extraFields)) {
+                    formData.append(k, String(v));
+                }
+                const response = await axios_1.default.post('https://api.ocr.space/parse/image', formData, {
+                    headers: formData.getHeaders(),
+                    maxBodyLength: Infinity,
+                    timeout: 30000,
+                });
+                return response.data;
+            };
+            let ocrResult = null;
+            try {
+                ocrResult = await callOcr();
+                if (ocrResult?.IsErroredOnProcessing && ocrResult?.ErrorMessage) {
+                    const msg = Array.isArray(ocrResult.ErrorMessage)
+                        ? ocrResult.ErrorMessage.join(', ')
+                        : ocrResult.ErrorMessage;
+                    console.warn('OCR.space error (default):', msg);
+                    ocrResult = await callOcr({ OCREngine: '2', language: 'auto' });
+                    if (ocrResult?.IsErroredOnProcessing && ocrResult?.ErrorMessage) {
+                        const msg2 = Array.isArray(ocrResult.ErrorMessage)
+                            ? ocrResult.ErrorMessage.join(', ')
+                            : ocrResult.ErrorMessage;
+                        console.warn('OCR.space error (auto):', msg2);
+                        ocrResult = await callOcr({ language: 'eng' });
+                    }
+                }
+            }
+            catch (ocrErr) {
+                console.warn('OCR.space call failed:', ocrErr instanceof Error ? ocrErr.message : ocrErr);
+            }
+            let fullText = '';
+            let pages = 0;
+            if (ocrResult?.ParsedResults && Array.isArray(ocrResult.ParsedResults)) {
+                fullText = ocrResult.ParsedResults.map((p) => p.ParsedText || '').join('\n\n');
+                pages = ocrResult.ParsedResults.length;
+            }
+            res.json({ success: true, text: (fullText || '').trim(), pages });
         }
         catch (error) {
             console.error('Error parsing PDF:', error);
@@ -229,12 +264,33 @@ class ChatController {
     }
     async generateDynamicQuestions(req, res) {
         try {
-            const { businessName, businessField, businessGoal } = req.body || {};
+            const { businessName, businessField, businessGoal, systemPromptId, systemPromptText } = req.body || {};
             if (!businessName || !businessField || !businessGoal) {
                 res.status(400).json({ success: false, error: 'Business name, field, and goal are required' });
                 return;
             }
-            const prompt = `תבסס על המידע הבא, צור 5-8 שאלות מותאמות לבניית system prompt לסוכן AI:
+            let resolvedSystemPrompt = typeof systemPromptText === 'string' && systemPromptText.trim().length > 0
+                ? systemPromptText.trim()
+                : undefined;
+            if (!resolvedSystemPrompt && systemPromptId) {
+                const sp = await this.supabaseService.getSystemPrompt(systemPromptId);
+                if (sp?.prompt) {
+                    resolvedSystemPrompt = sp.prompt;
+                }
+            }
+            if (!resolvedSystemPrompt) {
+                const def = await this.supabaseService.getDefaultSystemPrompt();
+                if (def?.prompt) {
+                    resolvedSystemPrompt = def.prompt;
+                }
+            }
+            const prompt = `בהתבסס על ה-System Prompt הבא של הסוכנת, צור 5-8 שאלות מותאמות שיסייעו להשלים System Prompt מדויק לעסק:
+
+------ System Prompt (הקשר) ------
+${resolvedSystemPrompt || 'אתה סוכנת AI חכמה ומועילה. ענה בעברית בצורה ברורה וידידותית.'}
+----------------------------------
+
+פרטים שנאספו מהמשתמש:
 שם העסק: ${businessName}
 תחום העסק: ${businessField}
 מטרת הסוכן: ${businessGoal}
@@ -246,8 +302,13 @@ class ChatController {
 4. מטרות השיחה
 5. כללי ברזל
 
-ענה בעברית, רק את השאלות (ללא הסבר נוסף), כל שאלה בשורה נפרדת.`;
-            const response = await this.aiService.generateResponse([{ role: 'user', content: prompt }], { temperature: 0.7, maxTokens: 500 });
+הנחיות פורמט:
+- ענה בעברית בלבד
+- החזר רק את רשימת השאלות, ללא טקסט נוסף
+- כל שאלה בשורה נפרדת
+- שאל רק שאלה אחת בכל שורה
+- בין 5 ל-8 שאלות בסך הכול`;
+            const response = await this.aiService.generateResponse([{ role: 'user', content: prompt }], { temperature: 0.7, maxTokens: 500, systemPrompt: resolvedSystemPrompt });
             const questions = response.content
                 .split('\n')
                 .map(q => q.trim())

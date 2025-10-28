@@ -1,15 +1,18 @@
 import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { AIResponse, AIConfig, Message } from '../types/index.js';
+import { SupabaseService } from './supabase.service.js';
 
 export class AIService {
   private openai: OpenAI;
   private defaultConfig: AIConfig;
+  private supabaseService: SupabaseService;
 
   constructor() {
     this.openai = new OpenAI({
       apiKey: config.openai.apiKey,
     });
+    this.supabaseService = new SupabaseService();
     
     this.defaultConfig = {
       model: config.openai.model,
@@ -26,11 +29,54 @@ export class AIService {
     try {
       const aiConfig = { ...this.defaultConfig, ...customConfig };
       
-      // Convert messages to OpenAI format
-      const openaiMessages = messages.map(msg => ({
-        role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content
-      }));
+      // Resolve system prompt: prefer custom; otherwise try Supabase default; otherwise internal fallback
+      let systemPromptToUse = (aiConfig.systemPrompt && typeof aiConfig.systemPrompt === 'string' && aiConfig.systemPrompt.trim().length > 0)
+        ? aiConfig.systemPrompt.trim()
+        : '';
+
+      if (!systemPromptToUse) {
+        try {
+          const def = await this.supabaseService.getDefaultSystemPrompt();
+          if (def?.prompt) {
+            systemPromptToUse = def.prompt;
+          }
+        } catch (e) {
+          // ignore and fall back to internal default
+        }
+      }
+
+      if (!systemPromptToUse) {
+        systemPromptToUse = this.defaultConfig.systemPrompt;
+      }
+
+      // Load global guardrails and prepend to system prompt
+      let guardrails = '';
+      try {
+        // Lazy import to avoid bundler path issues
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const path = require('path');
+        const filePath = path.resolve(__dirname, '..', 'assets', 'global-guardrails.txt');
+        if (fs.existsSync(filePath)) {
+          guardrails = fs.readFileSync(filePath, 'utf8');
+        }
+      } catch {}
+
+      const combinedSystem = guardrails
+        ? `${guardrails}\n\n${systemPromptToUse}`
+        : systemPromptToUse;
+
+      // Convert messages to OpenAI format and inject combined system prompt
+      const openaiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [];
+      openaiMessages.push({ role: 'system', content: combinedSystem });
+
+      openaiMessages.push(
+        ...messages.map(msg => ({
+          role: msg.role as 'user' | 'assistant' | 'system',
+          content: msg.content
+        }))
+      );
 
       const completion = await this.openai.chat.completions.create({
         model: aiConfig.model,

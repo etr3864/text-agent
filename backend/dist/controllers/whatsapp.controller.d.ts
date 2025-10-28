@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 export declare class WhatsAppController {
     private supabase;
+    private aiService;
     private normalizePhoneNumber;
     webhook(req: Request, res: Response): Promise<void>;
     sendFirstMessage(req: Request, res: Response): Promise<void>;

@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import { wasenderService } from '../services/wasender.service.js';
 import { SupabaseService } from '../services/supabase.service.js';
+import { AIService } from '../services/ai.service.js';
 
 export class WhatsAppController {
   private supabase = new SupabaseService();
+  private aiService = new AIService();
 
   private normalizePhoneNumber(input: string): string {
     // Keep digits only
@@ -35,7 +37,7 @@ export class WhatsAppController {
       const event = payload?.event;
       const data = payload?.data;
 
-      if (event === 'messages.upsert' && data?.messages) {
+      if ((event === 'messages.upsert' || event === 'messages.received') && data?.messages) {
         const msg = data.messages;
         const message = Array.isArray(msg) ? msg[0] : msg;
         if (message?.key?.fromMe) {
@@ -43,7 +45,95 @@ export class WhatsAppController {
           res.status(200).json({ ok: true });
           return;
         }
-        console.log('Incoming message:', message?.message || message?.text || message);
+
+        // Extract text from different possible shapes
+        const text: string =
+          message?.message?.conversation ||
+          message?.conversation ||
+          message?.text?.body ||
+          message?.message?.extendedTextMessage?.text ||
+          '';
+
+        // Extract sender phone from remoteJid (e.g., "9725XXXXXXXX@s.whatsapp.net")
+        const remoteJid: string = message?.key?.remoteJid || message?.from || '';
+        const digitsOnly = (remoteJid || '').replace(/\D+/g, '');
+        let senderPhone = digitsOnly;
+        if (senderPhone) {
+          // Ensure normalized to 972 format
+          senderPhone = this.normalizePhoneNumber(senderPhone);
+        }
+
+        console.log('Incoming message (parsed):', { text, senderPhone });
+
+        if (!text || !senderPhone || !/^972[0-9]{9}$/.test(senderPhone)) {
+          console.warn('Webhook message missing text or valid sender phone');
+          res.status(200).json({ ok: true });
+          return;
+        }
+
+        // Load system prompt for this user (fallback to default inside service)
+        const userWithPrompt = await this.supabase.getUserWithSystemPromptByPhone(senderPhone);
+        const systemPrompt = userWithPrompt?.systemPrompt?.prompt;
+
+        // Call AI to generate reply
+        const aiResponse = await this.aiService.generateResponse(
+          [ { role: 'user', content: text } as any ],
+          systemPrompt ? { systemPrompt } : undefined
+        );
+
+        const replyText = aiResponse?.content?.trim();
+        if (replyText && replyText.length > 0) {
+          await wasenderService.sendMessage(senderPhone, replyText);
+          if (userWithPrompt?.user?.id) {
+            await this.supabase.updateUserWhatsAppStatus(userWithPrompt.user.id, 'active');
+          }
+        }
+      }
+
+      // Handle chats.update events (some providers deliver text here)
+      if (event === 'chats.update' && data?.chats) {
+        const chats = data.chats;
+        const firstMsg = Array.isArray(chats?.messages) ? chats.messages[0] : chats?.messages?.[0];
+        const fromMe = firstMsg?.message?.key?.fromMe;
+        if (fromMe === true) {
+          res.status(200).json({ ok: true });
+          return;
+        }
+
+        const text: string =
+          firstMsg?.message?.message?.conversation ||
+          firstMsg?.message?.conversation ||
+          firstMsg?.message?.text?.body ||
+          firstMsg?.message?.message?.extendedTextMessage?.text ||
+          '';
+
+        const chatsId: string = chats?.id || '';
+        const remoteJid: string = chatsId || firstMsg?.message?.key?.remoteJid || '';
+        const digitsOnly = (remoteJid || '').replace(/\D+/g, '');
+        let senderPhone = digitsOnly ? this.normalizePhoneNumber(digitsOnly) : '';
+
+        console.log('Incoming chats.update (parsed):', { text, senderPhone });
+
+        if (!text || !senderPhone || !/^972[0-9]{9}$/.test(senderPhone)) {
+          res.status(200).json({ ok: true });
+          return;
+        }
+
+        const userWithPrompt = await this.supabase.getUserWithSystemPromptByPhone(senderPhone);
+        const systemPrompt = userWithPrompt?.systemPrompt?.prompt;
+
+        const aiResponse = await this.aiService.generateResponse(
+          [ { role: 'user', content: text } as any ],
+          systemPrompt ? { systemPrompt } : undefined
+        );
+
+        const replyText = aiResponse?.content?.trim();
+        if (replyText && replyText.length > 0) {
+          await wasenderService.sendMessage(senderPhone, replyText);
+          if (userWithPrompt?.user?.id) {
+            await this.supabase.updateUserWhatsAppStatus(userWithPrompt.user.id, 'active');
+          }
+        }
       }
 
       res.status(200).json({ ok: true });
@@ -59,6 +149,7 @@ export class WhatsAppController {
       
       let phoneNumber = userPhone;
       let userName: string | undefined;
+      let userBusinessName: string | undefined;
       let systemPromptText: string | undefined;
       
       // If no phone provided, try to get it from Supabase using systemPromptId
@@ -71,6 +162,7 @@ export class WhatsAppController {
           if (user && user.phone_number) {
             phoneNumber = user.phone_number;
             userName = user.name || undefined;
+            userBusinessName = user.business_name || undefined;
           }
         }
       }
@@ -87,16 +179,19 @@ export class WhatsAppController {
         return;
       }
 
-      // Build a friendly opening message from system prompt (if available)
+      // Build the opening message
       let messageText = text;
       if (!messageText) {
-        const snippet = (systemPromptText || '').replace(/\s+/g, ' ').slice(0, 80).trim();
-        const namePart = userName ? ` היי ${userName}!` : ' היי!';
-        if (snippet.length > 0) {
-          messageText = `${namePart} אני הסוכנת שלך. ${snippet}... איך אפשר לעזור היום?`;
-        } else {
-          messageText = `${namePart} אני הסוכנת שלך. איך אפשר לעזור היום?`;
-        }
+        // Fetch user by phone (post-normalization) to ensure we have latest name and business_name
+        const userByPhone = await this.supabase.getUserByPhone(phoneNumber);
+        const displayName = (userByPhone?.name || userName || '').trim();
+        const businessName = (userByPhone?.business_name || userBusinessName || '').trim();
+
+        // Format: "היי {שם} אני דנה מ{שם העסק} 😊מתחילים שיחת הדמייה"
+        // If name missing, omit it gracefully; if business missing, omit the "מ{...}" part
+        const helloPart = displayName ? `היי ${displayName}` : 'היי';
+        const businessPart = businessName ? ` מ${businessName}` : '';
+        messageText = `${helloPart} אני דנה${businessPart} 😊מתחילים שיחת הדמייה`;
       }
       const wasenderResponse = await wasenderService.sendMessage(phoneNumber, messageText);
 
