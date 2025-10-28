@@ -10,7 +10,7 @@ export const config = {
   // OpenAI Configuration
   openai: {
     apiKey: process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+    model: process.env.OPENAI_MODEL || 'gpt-4o',
   },
   
   // Security
@@ -18,7 +18,7 @@ export const config = {
   apiRateLimit: parseInt(process.env.API_RATE_LIMIT || '100'),
   
   // CORS Configuration
-  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3001',
+  corsOrigin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
   
   // Logging
   logLevel: process.env.LOG_LEVEL || 'info',
@@ -26,6 +26,24 @@ export const config = {
   // Database (for future use)
   database: {
     url: process.env.DATABASE_URL || '',
+  },
+
+  // Supabase Configuration
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    anonKey: process.env.SUPABASE_ANON_KEY || '',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  },
+
+  // Wasender API Configuration
+  wasender: {
+    baseUrl: process.env.WASENDER_BASE_URL || '',
+    apiKey: process.env.WASENDER_API_KEY || '',
+  },
+
+  // OCR.space API Configuration
+  ocr: {
+    apiKey: process.env.OCR_API_KEY || ''
   }
 };
 

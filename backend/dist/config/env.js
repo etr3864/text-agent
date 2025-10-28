@@ -11,11 +11,11 @@ exports.config = {
     nodeEnv: process.env.NODE_ENV || 'development',
     openai: {
         apiKey: process.env.OPENAI_API_KEY || '',
-        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+        model: process.env.OPENAI_MODEL || 'gpt-4o',
     },
     jwtSecret: process.env.JWT_SECRET || 'your-secret-key',
     apiRateLimit: parseInt(process.env.API_RATE_LIMIT || '100'),
-    corsOrigin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3001'],
+    corsOrigin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
     logLevel: process.env.LOG_LEVEL || 'info',
     database: {
         url: process.env.DATABASE_URL || '',
@@ -23,6 +23,11 @@ exports.config = {
     supabase: {
         url: process.env.SUPABASE_URL || '',
         anonKey: process.env.SUPABASE_ANON_KEY || '',
+        serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+    },
+    wasender: {
+        baseUrl: process.env.WASENDER_BASE_URL || '',
+        apiKey: process.env.WASENDER_API_KEY || '',
     },
     ocr: {
         apiKey: process.env.OCR_API_KEY || ''

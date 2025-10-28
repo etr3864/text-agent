@@ -38,32 +38,17 @@ export class ConversationService {
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
     try {
       let conversation: Conversation;
-      let userEmail = request.userEmail;
 
-      // If user email or phone is provided, ensure user exists in database
-      if (userEmail) {
-        let user = await this.supabaseService.getUser(userEmail);
+      // Ensure user exists (by email or phone)
+      if (request.userEmail) {
+        let user = await this.supabaseService.getUser(request.userEmail);
         if (!user) {
-          // Create user automatically with default system prompt
-          console.log(`Creating new user: ${userEmail}`);
-          user = await this.supabaseService.createUser(userEmail);
-          if (!user) {
-            console.error(`Failed to create user: ${userEmail}`);
-            // Continue without user email if creation fails
-            userEmail = undefined;
-          }
+          user = await this.supabaseService.createUser(request.userEmail);
         }
       } else if (request.userPhone) {
         let user = await this.supabaseService.getUserByPhone(request.userPhone);
         if (!user) {
-          // Create user automatically with default system prompt
-          console.log(`Creating new user by phone: ${request.userPhone}`);
           user = await this.supabaseService.createUserByPhone(request.userPhone);
-          if (!user) {
-            console.error(`Failed to create user by phone: ${request.userPhone}`);
-            // Continue without user phone if creation fails
-            request.userPhone = undefined;
-          }
         }
       }
 
@@ -77,7 +62,6 @@ export class ConversationService {
         conversation = await this.createConversation();
       }
 
-      // Create user message
       const userMessage: Message = {
         id: uuidv4(),
         role: 'user',
@@ -86,21 +70,31 @@ export class ConversationService {
         conversationId: conversation.id
       };
 
-      // Add user message to conversation
       conversation.messages.push(userMessage);
 
-      // Prepare messages for AI (without system message, as it will be added by AI service)
       const messagesForAI = conversation.messages.filter(msg => msg.role !== 'system');
-      
-      // Generate AI response with user email or phone for system prompt lookup
+
+      // Determine system prompt: prefer request.systemPrompt; otherwise load from Supabase (by phone/email)
+      let systemPromptToUse: string | undefined = request.systemPrompt;
+      if (!systemPromptToUse) {
+        if (request.userPhone) {
+          const result = await this.supabaseService.getUserWithSystemPromptByPhone(request.userPhone);
+          if (result?.systemPrompt?.prompt) {
+            systemPromptToUse = result.systemPrompt.prompt;
+          }
+        } else if (request.userEmail) {
+          const result = await this.supabaseService.getUserWithSystemPrompt(request.userEmail);
+          if (result?.systemPrompt?.prompt) {
+            systemPromptToUse = result.systemPrompt.prompt;
+          }
+        }
+      }
+
       const aiResponse = await this.aiService.generateResponse(
-        messagesForAI, 
-        request.systemPrompt ? { systemPrompt: request.systemPrompt } : undefined,
-        userEmail,
-        request.userPhone
+        messagesForAI,
+        systemPromptToUse ? { systemPrompt: systemPromptToUse } : undefined
       );
 
-      // Create assistant message
       const assistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
@@ -109,11 +103,9 @@ export class ConversationService {
         conversationId: conversation.id
       };
 
-      // Add assistant message to conversation
       conversation.messages.push(assistantMessage);
       conversation.updatedAt = new Date();
 
-      // Update conversation title if it's the first message
       if (conversation.messages.length === 2) {
         conversation.title = this.generateTitle(request.message);
       }
@@ -139,7 +131,6 @@ export class ConversationService {
   }
 
   private generateTitle(message: string): string {
-    // Simple title generation - take first 50 characters
     const title = message.length > 50 ? message.substring(0, 50) + '...' : message;
     return title.trim();
   }

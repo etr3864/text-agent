@@ -96,18 +96,20 @@ class ApiService {
     return response.data;
   }
 
-  // Send first message to user - Backend API call
-  async sendFirstMessage(userPhone: string) {
-    const response = await this.api.post('/send-first-message', { userPhone });
+  // Send first message to user - Backend API call (WhatsApp)
+  async sendFirstMessage(systemPromptId: string) {
+    // Derive base origin from VITE_API_URL and call WhatsApp route directly
+    const origin = (API_BASE_URL || '').replace('/api/chat', '');
+    const url = `${origin}/api/whatsapp/send-first-message`;
+    const response = await axios.post(url, { systemPromptId }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
     return response.data;
   }
 
   // Update user business name
+  // frontend/src/lib/api.ts
   async updateUserBusinessName(userPhone: string, businessName: string) {
-    const response = await this.api.put('/users/business-name', { userPhone, businessName });
-    return response.data;
+    return (await this.api.put('/users/business-name', { phone: userPhone, businessName })).data;
   }
-
   // Parse PDF file
   async parsePdf(formData: FormData) {
     const response = await this.api.post('/parse-pdf', formData, {

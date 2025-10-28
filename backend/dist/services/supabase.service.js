@@ -5,7 +5,8 @@ const supabase_js_1 = require("@supabase/supabase-js");
 const env_1 = require("../config/env");
 class SupabaseService {
     constructor() {
-        this.supabase = (0, supabase_js_1.createClient)(env_1.config.supabase.url, env_1.config.supabase.anonKey);
+        const key = env_1.config.supabase.serviceRoleKey || env_1.config.supabase.anonKey;
+        this.supabase = (0, supabase_js_1.createClient)(env_1.config.supabase.url, key);
     }
     async getSystemPrompt(id) {
         try {
@@ -96,6 +97,24 @@ class SupabaseService {
         }
         catch (error) {
             console.error('Error in getUserByPhone:', error);
+            return null;
+        }
+    }
+    async getUserBySystemPromptId(systemPromptId) {
+        try {
+            const { data, error } = await this.supabase
+                .from('users')
+                .select('*')
+                .eq('system_prompt_id', systemPromptId)
+                .single();
+            if (error) {
+                console.error('Error fetching user by system prompt ID:', error);
+                return null;
+            }
+            return data;
+        }
+        catch (error) {
+            console.error('Error in getUserBySystemPromptId:', error);
             return null;
         }
     }

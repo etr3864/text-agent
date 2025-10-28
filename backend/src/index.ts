@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { config, validateConfig } from './config/env.js';
 import chatRoutes from './routes/chat.routes.js';
 import healthRoutes from './routes/health.routes.js';
+import whatsappRoutes from './routes/whatsapp.routes.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 
 // Validate configuration
@@ -38,6 +39,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Routes
 app.use('/api/health', healthRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
 
 // Error handling middleware
 app.use(notFoundHandler);
@@ -50,6 +52,7 @@ app.listen(PORT, () => {
   console.log(`📡 Environment: ${config.nodeEnv}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
   console.log(`💬 Chat API: http://localhost:${PORT}/api/chat`);
+  console.log(`📲 WhatsApp Webhook: http://localhost:${PORT}/api/whatsapp/webhook`);
 });
 
 export default app;

@@ -31,27 +31,16 @@ class ConversationService {
     async sendMessage(request) {
         try {
             let conversation;
-            let userEmail = request.userEmail;
-            if (userEmail) {
-                let user = await this.supabaseService.getUser(userEmail);
+            if (request.userEmail) {
+                let user = await this.supabaseService.getUser(request.userEmail);
                 if (!user) {
-                    console.log(`Creating new user: ${userEmail}`);
-                    user = await this.supabaseService.createUser(userEmail);
-                    if (!user) {
-                        console.error(`Failed to create user: ${userEmail}`);
-                        userEmail = undefined;
-                    }
+                    user = await this.supabaseService.createUser(request.userEmail);
                 }
             }
             else if (request.userPhone) {
                 let user = await this.supabaseService.getUserByPhone(request.userPhone);
                 if (!user) {
-                    console.log(`Creating new user by phone: ${request.userPhone}`);
                     user = await this.supabaseService.createUserByPhone(request.userPhone);
-                    if (!user) {
-                        console.error(`Failed to create user by phone: ${request.userPhone}`);
-                        request.userPhone = undefined;
-                    }
                 }
             }
             if (request.conversationId) {
@@ -73,7 +62,22 @@ class ConversationService {
             };
             conversation.messages.push(userMessage);
             const messagesForAI = conversation.messages.filter(msg => msg.role !== 'system');
-            const aiResponse = await this.aiService.generateResponse(messagesForAI, request.systemPrompt ? { systemPrompt: request.systemPrompt } : undefined);
+            let systemPromptToUse = request.systemPrompt;
+            if (!systemPromptToUse) {
+                if (request.userPhone) {
+                    const result = await this.supabaseService.getUserWithSystemPromptByPhone(request.userPhone);
+                    if (result?.systemPrompt?.prompt) {
+                        systemPromptToUse = result.systemPrompt.prompt;
+                    }
+                }
+                else if (request.userEmail) {
+                    const result = await this.supabaseService.getUserWithSystemPrompt(request.userEmail);
+                    if (result?.systemPrompt?.prompt) {
+                        systemPromptToUse = result.systemPrompt.prompt;
+                    }
+                }
+            }
+            const aiResponse = await this.aiService.generateResponse(messagesForAI, systemPromptToUse ? { systemPrompt: systemPromptToUse } : undefined);
             const assistantMessage = {
                 id: (0, uuid_1.v4)(),
                 role: 'assistant',

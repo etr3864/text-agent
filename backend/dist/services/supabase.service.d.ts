@@ -28,6 +28,7 @@ export declare class SupabaseService {
     getDefaultSystemPrompt(): Promise<SystemPrompt | null>;
     getUser(email: string): Promise<User | null>;
     getUserByPhone(phoneNumber: string): Promise<User | null>;
+    getUserBySystemPromptId(systemPromptId: string): Promise<User | null>;
     createUser(email: string, name?: string, systemPromptId?: string, phone?: string, businessName?: string): Promise<User | null>;
     createUserByPhone(phoneNumber: string, name?: string, systemPromptId?: string): Promise<User | null>;
     updateUserSystemPrompt(userId: string, systemPromptId: string): Promise<boolean>;

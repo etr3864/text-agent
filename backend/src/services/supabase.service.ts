@@ -29,7 +29,8 @@ export class SupabaseService {
   private supabase: SupabaseClient;
 
   constructor() {
-    this.supabase = createClient(config.supabase.url, config.supabase.anonKey);
+    const key = config.supabase.serviceRoleKey || config.supabase.anonKey;
+    this.supabase = createClient(config.supabase.url, key);
   }
 
   // System Prompts methods
@@ -132,6 +133,26 @@ export class SupabaseService {
       return data;
     } catch (error) {
       console.error('Error in getUserByPhone:', error);
+      return null;
+    }
+  }
+
+  async getUserBySystemPromptId(systemPromptId: string): Promise<User | null> {
+    try {
+      const { data, error } = await this.supabase
+        .from('users')
+        .select('*')
+        .eq('system_prompt_id', systemPromptId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching user by system prompt ID:', error);
+        return null;
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Error in getUserBySystemPromptId:', error);
       return null;
     }
   }

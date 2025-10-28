@@ -10,16 +10,11 @@ const router = express_1.default.Router();
 const chatController = new chat_controller_js_1.ChatController();
 const upload = (0, multer_1.default)({
     storage: multer_1.default.memoryStorage(),
-    limits: {
-        fileSize: 5 * 1024 * 1024,
-    },
+    limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
-            cb(null, true);
-        }
-        else {
-            cb(new Error('Only PDF files are allowed'));
-        }
+        if (file.mimetype === 'application/pdf')
+            return cb(null, true);
+        cb(new Error('Only PDF files are allowed'));
     },
 });
 router.post('/send', chatController.sendMessage.bind(chatController));
@@ -31,5 +26,6 @@ router.post('/generate-dynamic-questions', chatController.generateDynamicQuestio
 router.post('/parse-pdf', upload.single('pdf'), chatController.parsePdf.bind(chatController));
 router.post('/generate-custom-prompt', chatController.generateCustomSystemPrompt.bind(chatController));
 router.put('/users/business-name', chatController.updateUserBusinessName.bind(chatController));
+router.put('/system-prompts/:id', chatController.updateSystemPrompt.bind(chatController));
 exports.default = router;
 //# sourceMappingURL=chat.routes.js.map

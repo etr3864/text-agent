@@ -1,20 +1,32 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Check, Copy, Download } from "lucide-react";
-import { useState } from "react";
+import { Textarea } from "@/components/ui/textarea";
+import { Check, Copy, Download, Send } from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { apiService } from "@/lib/api";
 
 interface ResultStepProps {
   systemPrompt: string;
+  systemPromptId?: string;
   onRestart: () => void;
+  onPromptUpdate?: (newPrompt: string) => void;
+  userPhone?: string;
 }
 
-export const ResultStep = ({ systemPrompt, onRestart }: ResultStepProps) => {
+export const ResultStep = ({ systemPrompt, systemPromptId, onRestart, onPromptUpdate, userPhone }: ResultStepProps) => {
   const [copied, setCopied] = useState(false);
+  const [editablePrompt, setEditablePrompt] = useState(systemPrompt);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isStartingSim, setIsStartingSim] = useState(false);
+
+  useEffect(() => {
+    setEditablePrompt(systemPrompt);
+  }, [systemPrompt]);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(systemPrompt);
+      await navigator.clipboard.writeText(editablePrompt);
       setCopied(true);
       toast.success("הועתק ללוח!");
       setTimeout(() => setCopied(false), 2000);
@@ -24,7 +36,7 @@ export const ResultStep = ({ systemPrompt, onRestart }: ResultStepProps) => {
   };
 
   const handleDownload = () => {
-    const blob = new Blob([systemPrompt], { type: "text/plain" });
+    const blob = new Blob([editablePrompt], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -34,6 +46,37 @@ export const ResultStep = ({ systemPrompt, onRestart }: ResultStepProps) => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     toast.success("הקובץ הורד בהצלחה!");
+  };
+
+  const handleSave = async () => {
+    try {
+      setIsSaving(true);
+      if (systemPromptId) {
+        await apiService.updateSystemPrompt(systemPromptId, editablePrompt);
+      }
+      onPromptUpdate?.(editablePrompt);
+      toast.success("נשמר בהצלחה");
+    } catch (err) {
+      toast.error("שמירה נכשלה");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleStartSimulation = async () => {
+    if (!systemPromptId) {
+      toast.error("אין מזהה פרומפט להתחלת הדמיה");
+      return;
+    }
+    try {
+      setIsStartingSim(true);
+      await apiService.sendFirstMessage(systemPromptId);
+      toast.success("הדמיה התחילה ונשלחה הודעה ראשונה");
+    } catch (err) {
+      toast.error("כשל בהתחלת הדמיה");
+    } finally {
+      setIsStartingSim(false);
+    }
   };
 
   return (
@@ -55,34 +98,33 @@ export const ResultStep = ({ systemPrompt, onRestart }: ResultStepProps) => {
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-foreground">System Prompt</h3>
             <div className="flex gap-2">
-              <Button
-                onClick={handleCopy}
-                variant="outline"
-                size="sm"
-                className="gap-2"
-              >
-                {copied ? (
-                  <Check className="w-4 h-4" />
-                ) : (
-                  <Copy className="w-4 h-4" />
-                )}
+              <Button onClick={handleCopy} variant="outline" size="sm" className="gap-2">
+                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                 {copied ? "הועתק" : "העתק"}
               </Button>
-              <Button
-                onClick={handleDownload}
-                variant="outline"
-                size="sm"
-                className="gap-2"
-              >
+              <Button onClick={handleDownload} variant="outline" size="sm" className="gap-2">
                 <Download className="w-4 h-4" />
                 הורד
               </Button>
             </div>
           </div>
-          <div className="bg-muted/50 rounded-lg p-4 max-h-[400px] overflow-y-auto">
-            <pre className="text-sm whitespace-pre-wrap font-mono text-foreground" dir="ltr">
-              {systemPrompt}
-            </pre>
+
+          {/* Editable prompt */}
+          <Textarea
+            value={editablePrompt}
+            onChange={(e) => setEditablePrompt(e.target.value)}
+            className="min-h-[260px] font-mono"
+            dir="ltr"
+          />
+
+          <div className="flex gap-2 justify-end">
+            <Button onClick={handleSave} disabled={isSaving} variant="default">
+              {isSaving ? "שומר..." : "שמור"}
+            </Button>
+            <Button onClick={handleStartSimulation} disabled={isStartingSim} variant="outline" className="gap-2">
+              <Send className="w-4 h-4" />
+              {isStartingSim ? "מתחיל..." : "התחל הדמיה"}
+            </Button>
           </div>
         </div>
       </Card>

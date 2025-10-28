@@ -5,8 +5,5 @@ export declare class AIService {
     constructor();
     generateResponse(messages: Message[], customConfig?: Partial<AIConfig>): Promise<AIResponse>;
     generateSystemPrompt(prompt: string): Promise<string>;
-    generateDynamicQuestions(systemPrompt: string): Promise<string[]>;
-    generateCustomSystemPrompt(combinedAnswers: string): Promise<string>;
 }
-export declare const aiService: AIService;
 //# sourceMappingURL=ai.service.d.ts.map
