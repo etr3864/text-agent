@@ -1,12 +1,21 @@
 import { Request, Response } from 'express';
-import { wasenderService } from '../services/wasender.service.js';
-import { SupabaseService } from '../services/supabase.service.js';
-import { AIService } from '../services/ai.service.js';
-import { mediaService } from '../services/media.service.js';
+import { wasenderService } from '../services/wasender.service';
+import { SupabaseService } from '../services/supabase.service';
+import { AIService } from '../services/ai.service';
+import { mediaService } from '../services/media.service';
+import { ConversationService } from '../services/conversation.service';
 
 export class WhatsAppController {
   private supabase = new SupabaseService();
   private aiService = new AIService();
+  private conversationService = new ConversationService();
+  
+  // Store conversation IDs per phone number
+  private conversationIds = new Map<string, string>();
+  
+  // Deduplication: store processed message IDs (with TTL cleanup)
+  private processedMessageIds = new Map<string, number>(); // messageId -> timestamp
+  private readonly MESSAGE_ID_TTL = 60000; // 1 minute
   
   // Debouncing mechanism for message collection
   private messageBuffers = new Map<string, {
@@ -24,7 +33,28 @@ export class WhatsAppController {
     lastMessageTime?: number;
   }>();
   
-  private readonly DEBOUNCE_DELAY = 5000; // 5 seconds
+  private readonly DEBOUNCE_DELAY = 10000; // 10 seconds
+
+  // Check if message was already processed (deduplication)
+  private isMessageProcessed(messageId: string): boolean {
+    const now = Date.now();
+    
+    // Clean up old entries
+    for (const [id, timestamp] of this.processedMessageIds.entries()) {
+      if (now - timestamp > this.MESSAGE_ID_TTL) {
+        this.processedMessageIds.delete(id);
+      }
+    }
+    
+    // Check if this message was already processed
+    if (this.processedMessageIds.has(messageId)) {
+      return true;
+    }
+    
+    // Mark as processed
+    this.processedMessageIds.set(messageId, now);
+    return false;
+  }
 
   private async processMessageWithDebounce(
     senderPhone: string, 
@@ -116,13 +146,24 @@ export class WhatsAppController {
         
         const systemPrompt = userWithPrompt?.systemPrompt?.prompt;
 
-        // Call AI to generate reply
-        const aiResponse = await this.aiService.generateResponse(
-          [{ role: 'user', content: combinedText } as any],
-          systemPrompt ? { systemPrompt } : undefined
-        );
+        // Get or create conversation ID for this phone number
+        let conversationId = this.conversationIds.get(senderPhone);
+        
+        // Call AI to generate reply using conversation service (with history)
+        const conversationResponse = await this.conversationService.sendMessage({
+          message: combinedText,
+          userPhone: senderPhone,
+          conversationId: conversationId,
+          systemPrompt: systemPrompt,
+          customerGender: userWithPrompt?.user?.customer_gender || undefined
+        });
 
-        const replyText = aiResponse?.content?.trim();
+        // Store the conversation ID for future messages
+        if (conversationResponse?.conversationId) {
+          this.conversationIds.set(senderPhone, conversationResponse.conversationId);
+        }
+
+        const replyText = conversationResponse?.message?.content?.trim();
         if (replyText && replyText.length > 0) {
           await wasenderService.sendMessage(senderPhone, replyText);
           if (userWithPrompt?.user?.id) {
@@ -178,6 +219,17 @@ export class WhatsAppController {
       if ((event === 'messages.upsert' || event === 'messages.received') && data?.messages) {
         const msg = data.messages;
         const message = Array.isArray(msg) ? msg[0] : msg;
+        
+        // Extract message ID for deduplication
+        const messageId = message?.key?.id || message?.id || '';
+        
+        // Skip if already processed (deduplication)
+        if (messageId && this.isMessageProcessed(messageId)) {
+          console.log(`⏭️  Skipping duplicate message: ${messageId}`);
+          res.status(200).json({ ok: true });
+          return;
+        }
+        
         if (message?.key?.fromMe) {
           console.log('Skipping message sent by bot (fromMe=true)');
           res.status(200).json({ ok: true });
@@ -289,7 +341,7 @@ export class WhatsAppController {
             }
             
             // Analyze image with GPT-4 Vision
-            const { ImageAnalysisService } = await import('../services/image-analysis.service.js');
+            const { ImageAnalysisService } = await import('../services/image-analysis.service');
             const imageAnalysisService = new ImageAnalysisService();
             
             const imageAnalysis = await imageAnalysisService.analyzeImage(inputPath);
@@ -311,6 +363,17 @@ export class WhatsAppController {
       if (event === 'chats.update' && data?.chats) {
         const chats = data.chats;
         const firstMsg = Array.isArray(chats?.messages) ? chats.messages[0] : chats?.messages?.[0];
+        
+        // Extract message ID for deduplication
+        const messageId = firstMsg?.message?.key?.id || firstMsg?.message?.id || '';
+        
+        // Skip if already processed (deduplication)
+        if (messageId && this.isMessageProcessed(messageId)) {
+          console.log(`⏭️  Skipping duplicate message (chats.update): ${messageId}`);
+          res.status(200).json({ ok: true });
+          return;
+        }
+        
         const fromMe = firstMsg?.message?.key?.fromMe;
         if (fromMe === true) {
           res.status(200).json({ ok: true });
@@ -427,22 +490,48 @@ export class WhatsAppController {
         return;
       }
 
-      // Build the opening message
-      let messageText = text;
-      if (!messageText) {
-        // Fetch user by phone (post-normalization) to ensure we have latest name and business_name
-        const userByPhone = await this.supabase.getUserByPhone(phoneNumber);
-        const displayName = (userByPhone?.name || userName || '').trim();
-        const businessName = (userByPhone?.business_name || userBusinessName || '').trim();
-
-        // Format: "היי {שם} אני דנה מ{שם העסק} 😊מתחילים שיחת הדמייה"
-        // If name missing, omit it gracefully; if business missing, omit the "מ{...}" part
-        const helloPart = displayName ? `היי ${displayName}` : 'היי';
-        const businessPart = businessName ? ` מ${businessName}` : '';
-        messageText = `${helloPart} אני דנה${businessPart} 😊מתחילים שיחת הדמייה`;
+      // Get existing user
+      const existingUser = await this.supabase.getUserByPhone(phoneNumber);
+      
+      // Allow new simulations! Only block if message was sent very recently (< 1 minute)
+      // This allows creating multiple simulations for the same user
+      if (existingUser && existingUser.whatsapp_status === 'sent' && existingUser.first_message_sent_at) {
+        const timeSinceFirstMessage = Date.now() - new Date(existingUser.first_message_sent_at).getTime();
+        
+        // If less than 1 minute passed, it's the same simulation
+        if (timeSinceFirstMessage < 60000) {
+          res.json({ success: true, message: 'First message already sent recently (< 1 min ago)' });
+          return;
+        }
+        
+        // More than 1 minute passed - this is a new simulation!
+        console.log(`🔄 Starting new simulation for ${phoneNumber} (previous was ${Math.floor(timeSinceFirstMessage/1000)}s ago)`);
+        
+        // מחיקת השיחה הישנה לפני התחלת החדשה
+        const oldConversationId = this.conversationIds.get(phoneNumber);
+        if (oldConversationId) {
+          await this.conversationService.deleteConversation(oldConversationId);
+          this.conversationIds.delete(phoneNumber);
+          console.log(`🗑️  Cleared old conversation for new simulation`);
+        }
       }
-      const wasenderResponse = await wasenderService.sendMessage(phoneNumber, messageText);
 
+      // Build first message from system prompt and user profile
+      const userWithPrompt = await this.supabase.getUserWithSystemPromptByPhone(phoneNumber);
+      const systemPrompt = userWithPrompt?.systemPrompt?.prompt || systemPromptText;
+      // Always get agent name (default to "נועה" if not found in system prompt)
+      const agentName = this.extractAgentName(systemPrompt);
+      const customerName = userName || userBusinessName || undefined;
+
+      // Always include "אני [שם סוכנת]" in the message
+      let firstMessage = '';
+      if (customerName) {
+        firstMessage = `היי ${customerName} אני ${agentName} מתחילים שיחת הדמייה`;
+      } else {
+        firstMessage = `היי אני ${agentName} מתחילים שיחת הדמייה`;
+      }
+
+      const wasenderResponse = await wasenderService.sendMessage(phoneNumber, firstMessage);
       if (!wasenderResponse.success) {
         res.status(502).json({ success: false, error: 'Failed to send via Wasender', details: wasenderResponse.error });
         return;
@@ -454,11 +543,31 @@ export class WhatsAppController {
         await this.supabase.updateUserWhatsAppStatus(user.id, 'sent');
       }
 
-      res.json({ success: true, message: 'First message sent successfully', wasenderResponse });
+      res.json({ success: true, message: 'First message sent successfully via AI' });
     } catch (error) {
       console.error('Error in sendFirstMessage:', error);
       res.status(500).json({ success: false, error: 'Internal server error' });
     }
+  }
+
+  private extractAgentName(systemPrompt?: string): string {
+    if (!systemPrompt) return 'נועה';
+    const lines = systemPrompt.split('\n').map(l => l.trim()).filter(Boolean);
+    const text = lines.join(' ');
+    const patterns: RegExp[] = [
+      /שמי\s+([\u0590-\u05FFA-Za-z"']{2,30})/,
+      /אני\s+([\u0590-\u05FFA-Za-z"']{2,30})/,
+      /הסוכנת\s+([\u0590-\u05FFA-Za-z"']{2,30})/,
+      /שם\s+הסוכנ[ת]\s*[:\-]?\s*([\u0590-\u05FFA-Za-z"']{2,30})/
+    ];
+    for (const re of patterns) {
+      const m = text.match(re);
+      if (m && m[1]) {
+        return m[1].replace(/["']/g, '').trim();
+      }
+    }
+    // Default to "נועה" if no agent name found in system prompt
+    return 'נועה';
   }
 
   async stopSimulation(req: Request, res: Response): Promise<void> {
@@ -485,8 +594,16 @@ export class WhatsAppController {
       }
 
       await this.supabase.updateUserWhatsAppStatus(user.id, 'stopped');
+      
+      // מחיקת היסטוריית השיחה מהזיכרון
+      const conversationId = this.conversationIds.get(normalizedPhone);
+      if (conversationId) {
+        await this.conversationService.deleteConversation(conversationId);
+        this.conversationIds.delete(normalizedPhone);
+        console.log(`🗑️  Deleted conversation history for ${normalizedPhone}`);
+      }
 
-      res.json({ success: true, message: 'Simulation stopped successfully' });
+      res.json({ success: true, message: 'Simulation stopped and conversation cleared successfully' });
     } catch (error) {
       console.error('Error in stopSimulation:', error);
       res.status(500).json({ success: false, error: 'Internal server error' });

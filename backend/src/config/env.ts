@@ -48,6 +48,12 @@ export const config = {
   // OCR.space API Configuration
   ocr: {
     apiKey: process.env.OCR_API_KEY || ''
+  },
+
+  // LlamaIndex (optional)
+  llamaindex: {
+    apiKey: process.env.LLAMAINDEX_API_KEY || '',
+    baseUrl: process.env.LLAMAINDEX_BASE_URL || 'https://api.llamaindex.ai',
   }
 };
 

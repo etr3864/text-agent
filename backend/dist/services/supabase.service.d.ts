@@ -19,6 +19,7 @@ export interface User {
     whatsapp_status: string | null;
     first_message_sent_at: string | null;
     last_message_at: string | null;
+    customer_gender: string | null;
 }
 export declare class SupabaseService {
     private supabase;

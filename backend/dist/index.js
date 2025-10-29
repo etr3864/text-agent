@@ -15,7 +15,12 @@ const whatsapp_routes_js_1 = __importDefault(require("./routes/whatsapp.routes.j
 const error_middleware_js_1 = require("./middleware/error.middleware.js");
 (0, env_js_1.validateConfig)();
 const app = (0, express_1.default)();
-app.set('trust proxy', true);
+if (env_js_1.config.nodeEnv === 'production') {
+    app.set('trust proxy', 1);
+}
+else {
+    app.set('trust proxy', false);
+}
 app.use((0, helmet_1.default)());
 app.use((0, compression_1.default)());
 app.use((0, cors_1.default)({

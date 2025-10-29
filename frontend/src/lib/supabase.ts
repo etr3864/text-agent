@@ -15,6 +15,7 @@ export interface User {
   name?: string;
   phone_number: string;
   system_prompt_id?: string;
+  customer_gender?: string;
   created_at: string;
   updated_at: string;
 }

@@ -5,7 +5,7 @@ export declare class AIService {
     private supabaseService;
     constructor();
     transcribeWav(filePath: string): Promise<string>;
-    generateResponse(messages: Message[], customConfig?: Partial<AIConfig>): Promise<AIResponse>;
+    generateResponse(messages: Message[], customConfig?: Partial<AIConfig>, isForWhatsApp?: boolean): Promise<AIResponse>;
     private validateResponseLength;
     generateSystemPrompt(prompt: string): Promise<string>;
 }

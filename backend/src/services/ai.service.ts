@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
-import { config } from '../config/env.js';
-import { AIResponse, AIConfig, Message } from '../types/index.js';
-import { SupabaseService } from './supabase.service.js';
+import { config } from '../config/env';
+import { AIResponse, AIConfig, Message } from '../types/index';
+import { SupabaseService } from './supabase.service';
 
 export class AIService {
   private openai: OpenAI;
@@ -16,7 +16,7 @@ export class AIService {
     
     this.defaultConfig = {
       model: config.openai.model,
-      temperature: 0.7,
+      temperature: 0.3,
       maxTokens: 1000,
       systemPrompt: 'אתה סוכנת AI חכמה ומועילה. ענה בעברית בצורה ברורה וידידותית. - תשמרי על זרימה טבעית, בלי לחזור על עצמך.\n' +
           '- אם הלקוח קצר – תעני בקצרה. אם מפורט – תתאימי את עצמך.\n' +
@@ -24,7 +24,7 @@ export class AIService {
           '- אם הוא מתנגד – תתייחסי בעדינות ואל תילחצי למכור.\n' +
           '- תמיד תשמרי על שפה אנושית, קלילה ומזמינה.\n' +
           '- לשאול רק שאלה אחת בכל הודעה \n' +
-          '- לענות עד 110 תווים כולל רווחים\n' +
+          '- לענות עד 200 תווים כולל רווחים\n' +
           '- אין לחרוג מהגבלה זו בשום מקרה\n' +
           '- אם התגובה ארוכה מדי, קיצר אותה\n' +
           '- תמיד ספור את התווים לפני השליחה\n' +
@@ -52,26 +52,16 @@ export class AIService {
 
   async generateResponse(
     messages: Message[],
-    customConfig?: Partial<AIConfig>
+    customConfig?: Partial<AIConfig>,
+    isForWhatsApp: boolean = false
   ): Promise<AIResponse> {
     try {
       const aiConfig = { ...this.defaultConfig, ...customConfig };
       
-      // Resolve system prompt: prefer custom; otherwise try Supabase default; otherwise internal fallback
+      // Resolve system prompt: prefer custom; otherwise internal fallback
       let systemPromptToUse = (aiConfig.systemPrompt && typeof aiConfig.systemPrompt === 'string' && aiConfig.systemPrompt.trim().length > 0)
         ? aiConfig.systemPrompt.trim()
         : '';
-
-      if (!systemPromptToUse) {
-        try {
-          const def = await this.supabaseService.getDefaultSystemPrompt();
-          if (def?.prompt) {
-            systemPromptToUse = def.prompt;
-          }
-        } catch (e) {
-          // ignore and fall back to internal default
-        }
-      }
 
       if (!systemPromptToUse) {
         systemPromptToUse = this.defaultConfig.systemPrompt;
@@ -91,9 +81,25 @@ export class AIService {
         }
       } catch {}
 
+      // Add behavioral guidelines directly in code
+      const behavioralGuidelines = `
+========================
+🤖 כללי בינה - התנהגות
+========================
+- תשמרי על זרימה טבעית ושפה אנושית.
+- תשאלי שאלה אחת בכל הודעה בלבד.
+- אל תחזרי על עצמך ואל תמהרי למכור.
+- אם הלקוח קצר – תעני בקצרה. אם מפורט – תזרמי איתו.
+- שמרי על איזון בין הומור קליל למקצועיות.
+- אם נדרשת הבהרה, השתמשי בשם הלקוח.
+- תמיד תשמרי על אווירה מזמינה, עם ביטחון ואמפתיה.
+- **חשוב מאוד: אם הלקוח שלח מספר הודעות - עני על כולן בהודעה אחת בלבד!**
+- **אל תשלחי מספר הודעות נפרדות - תמיד הודעה אחת מקיפה לכל מה שהלקוח כתב**
+========================`;
+
       const combinedSystem = guardrails
-        ? `${guardrails}\n\n${systemPromptToUse}`
-        : systemPromptToUse;
+        ? `${behavioralGuidelines}\n\n${guardrails}\n\n${systemPromptToUse}`
+        : `${behavioralGuidelines}\n\n${systemPromptToUse}`;
 
       // Convert messages to OpenAI format and inject combined system prompt
       const openaiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [];
@@ -106,18 +112,23 @@ export class AIService {
         }))
       );
 
-      // הוספת הגבלת תווים ל-system prompt
-      const systemPromptWithLimits = `${combinedSystem}
+      // הוספת הגבלת תווים ל-system prompt רק עבור WhatsApp
+      if (isForWhatsApp) {
+        const systemPromptWithLimits = `${combinedSystem}
 
 **חוקים חשובים לתגובה:**
 - התגובה חייבת להיות קצרה ומדויקת
-- מקסימום 110 תווים כולל רווחים
+- מקסימום 200 תווים כולל רווחים
 - אין לחרוג מהגבלה זו בשום מקרה
 - אם התגובה ארוכה מדי, קיצר אותה
 - תמיד ספור את התווים לפני השליחה`;
 
-      // עדכון ה-system message עם הגבלות
-      openaiMessages[0].content = systemPromptWithLimits;
+        // עדכון ה-system message עם הגבלות
+        openaiMessages[0].content = systemPromptWithLimits;
+      }
+
+      // Add thinking delay for smarter responses
+      await new Promise(resolve => setTimeout(resolve, 4000));
 
       const completion = await this.openai.chat.completions.create({
         model: aiConfig.model,
@@ -129,8 +140,8 @@ export class AIService {
       const response = completion.choices[0]?.message?.content || '';
       const usage = completion.usage;
       
-      // בדיקה נוספת של אורך התגובה
-      const validatedResponse = this.validateResponseLength(response);
+      // בדיקה נוספת של אורך התגובה רק עבור WhatsApp
+      const validatedResponse = isForWhatsApp ? this.validateResponseLength(response) : response;
 
       return {
         content: validatedResponse,
@@ -150,7 +161,7 @@ export class AIService {
    * בדיקה ותיקון אורך התגובה
    */
   private validateResponseLength(response: string): string {
-    const maxLength = 110;
+    const maxLength = 200;
     
     if (response.length <= maxLength) {
       return response;

@@ -48,7 +48,7 @@ class AIService {
         this.supabaseService = new supabase_service_js_1.SupabaseService();
         this.defaultConfig = {
             model: env_js_1.config.openai.model,
-            temperature: 0.7,
+            temperature: 0.3,
             maxTokens: 1000,
             systemPrompt: 'אתה סוכנת AI חכמה ומועילה. ענה בעברית בצורה ברורה וידידותית. - תשמרי על זרימה טבעית, בלי לחזור על עצמך.\n' +
                 '- אם הלקוח קצר – תעני בקצרה. אם מפורט – תתאימי את עצמך.\n' +
@@ -56,7 +56,7 @@ class AIService {
                 '- אם הוא מתנגד – תתייחסי בעדינות ואל תילחצי למכור.\n' +
                 '- תמיד תשמרי על שפה אנושית, קלילה ומזמינה.\n' +
                 '- לשאול רק שאלה אחת בכל הודעה \n' +
-                '- לענות עד 110 תווים כולל רווחים\n' +
+                '- לענות עד 150 תווים כולל רווחים\n' +
                 '- אין לחרוג מהגבלה זו בשום מקרה\n' +
                 '- אם התגובה ארוכה מדי, קיצר אותה\n' +
                 '- תמיד ספור את התווים לפני השליחה\n' +
@@ -80,22 +80,12 @@ class AIService {
             throw new Error('Failed to transcribe audio');
         }
     }
-    async generateResponse(messages, customConfig) {
+    async generateResponse(messages, customConfig, isForWhatsApp = false) {
         try {
             const aiConfig = { ...this.defaultConfig, ...customConfig };
             let systemPromptToUse = (aiConfig.systemPrompt && typeof aiConfig.systemPrompt === 'string' && aiConfig.systemPrompt.trim().length > 0)
                 ? aiConfig.systemPrompt.trim()
                 : '';
-            if (!systemPromptToUse) {
-                try {
-                    const def = await this.supabaseService.getDefaultSystemPrompt();
-                    if (def?.prompt) {
-                        systemPromptToUse = def.prompt;
-                    }
-                }
-                catch (e) {
-                }
-            }
             if (!systemPromptToUse) {
                 systemPromptToUse = this.defaultConfig.systemPrompt;
             }
@@ -109,24 +99,41 @@ class AIService {
                 }
             }
             catch { }
+            const behavioralGuidelines = `
+========================
+🤖 כללי בינה - התנהגות
+========================
+- תשמרי על זרימה טבעית ושפה אנושית.
+- תשאלי שאלה אחת בכל הודעה בלבד.
+- אל תחזרי על עצמך ואל תמהרי למכור.
+- אם הלקוח קצר – תעני בקצרה. אם מפורט – תזרמי איתו.
+- שמרי על איזון בין הומור קליל למקצועיות.
+- אם נדרשת הבהרה, השתמשי בשם הלקוח.
+- תמיד תשמרי על אווירה מזמינה, עם ביטחון ואמפתיה.
+- **חשוב מאוד: אם הלקוח שלח מספר הודעות - עני על כולן בהודעה אחת בלבד!**
+- **אל תשלחי מספר הודעות נפרדות - תמיד הודעה אחת מקיפה לכל מה שהלקוח כתב**
+========================`;
             const combinedSystem = guardrails
-                ? `${guardrails}\n\n${systemPromptToUse}`
-                : systemPromptToUse;
+                ? `${behavioralGuidelines}\n\n${guardrails}\n\n${systemPromptToUse}`
+                : `${behavioralGuidelines}\n\n${systemPromptToUse}`;
             const openaiMessages = [];
             openaiMessages.push({ role: 'system', content: combinedSystem });
             openaiMessages.push(...messages.map(msg => ({
                 role: msg.role,
                 content: msg.content
             })));
-            const systemPromptWithLimits = `${combinedSystem}
+            if (isForWhatsApp) {
+                const systemPromptWithLimits = `${combinedSystem}
 
 **חוקים חשובים לתגובה:**
 - התגובה חייבת להיות קצרה ומדויקת
-- מקסימום 110 תווים כולל רווחים
+- מקסימום 150 תווים כולל רווחים
 - אין לחרוג מהגבלה זו בשום מקרה
 - אם התגובה ארוכה מדי, קיצר אותה
 - תמיד ספור את התווים לפני השליחה`;
-            openaiMessages[0].content = systemPromptWithLimits;
+                openaiMessages[0].content = systemPromptWithLimits;
+            }
+            await new Promise(resolve => setTimeout(resolve, 4000));
             const completion = await this.openai.chat.completions.create({
                 model: aiConfig.model,
                 messages: openaiMessages,
@@ -135,7 +142,7 @@ class AIService {
             });
             const response = completion.choices[0]?.message?.content || '';
             const usage = completion.usage;
-            const validatedResponse = this.validateResponseLength(response);
+            const validatedResponse = isForWhatsApp ? this.validateResponseLength(response) : response;
             return {
                 content: validatedResponse,
                 usage: usage ? {
@@ -151,7 +158,7 @@ class AIService {
         }
     }
     validateResponseLength(response) {
-        const maxLength = 110;
+        const maxLength = 150;
         if (response.length <= maxLength) {
             return response;
         }

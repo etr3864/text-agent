@@ -24,6 +24,10 @@ export declare const config: {
     ocr: {
         apiKey: string;
     };
+    llamaindex: {
+        apiKey: string;
+        baseUrl: string;
+    };
 };
 export declare const validateConfig: () => void;
 //# sourceMappingURL=env.d.ts.map

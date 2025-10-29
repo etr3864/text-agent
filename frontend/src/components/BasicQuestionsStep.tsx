@@ -6,27 +6,37 @@ import { Label } from "@/components/ui/label";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { apiService } from "@/lib/api";
 
-const BASIC_QUESTIONS = [
+const BASIC_QUESTIONS: Array<{
+  id: string;
+  question: string;
+  placeholder: string;
+  type: 'text' | 'textarea';
+  required: boolean;
+  hint?: string;
+}> = [
   {
     id: 'businessName',
-    question: "מה שם העסק שלך?",
-    placeholder: "הכנס את שם העסק",
+    question: "מה שם העסק של הלקוח שלך?",
+    placeholder: "לדוגמה: שיווק בוטיק, סטודיו לעיצוב, קפה הפינה",
     type: 'text',
-    required: true
+    required: true,
+    hint: "💼 השם המסחרי של העסק של הלקוח"
   },
   {
     id: 'businessField',
-    question: "באיזה תחום העסק עוסק?",
-    placeholder: "למשל: ייעוץ עסקי, מכירות, שירות לקוחות, תכנות, שיווק, וכו'",
+    question: "באיזה תחום העסק של הלקוח עוסק?",
+    placeholder: "לדוגמה: שיווק דיגיטלי, קפה ומסעדה, ייעוץ עסקי, מכירות ביטוחים",
     type: 'textarea',
-    required: true
+    required: true,
+    hint: "🎯 אם אתה לא בטוח - פשוט שאל את הלקוח!"
   },
   {
     id: 'businessGoal',
     question: "מה המטרה העיקרית של הסוכן?",
-    placeholder: "למשל: מכירות, שירות לקוחות, ייעוץ, תמיכה טכנית, קביעת פגישות, וכו'",
+    placeholder: "לדוגמה: לסגור עסקאות, לתאם פגישות, לענות על שאלות נפוצות, לתת הצעות מחיר",
     type: 'textarea',
-    required: true
+    required: true,
+    hint: "🚀 מה הסוכן צריך להשיג בשיחה?"
   }
 ];
 
@@ -90,11 +100,18 @@ export const BasicQuestionsStep = ({ onNext, onPrevious, initialAnswers, userPho
 
   return (
     <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto space-y-8 animate-in fade-in duration-500">
-      <div className="text-center mb-8">
-        <h2 className="text-2xl font-bold text-foreground mb-2">פרטי העסק</h2>
+      <div className="text-center mb-8 space-y-4">
+        <h2 className="text-2xl font-bold text-foreground">פרטי העסק של הלקוח</h2>
         <p className="text-muted-foreground" dir="rtl">
-          נא למלא את הפרטים הבסיסיים על העסק שלך
+          מלא את הפרטים על העסק של הלקוח שלך
         </p>
+        <div className="max-w-xl mx-auto p-4 rounded-lg bg-primary/10 border border-primary/20 backdrop-blur-sm" dir="rtl">
+          <p className="text-sm text-foreground/90 leading-relaxed">
+            💡 <span className="font-semibold">טיפ מקצועי:</span> מה שאתה כבר יודע - מלא עכשיו. 
+            מה שאתה לא בטוח - אל תתבייש לשאול את הלקוח לפני! 
+            ככל שהמידע מדויק יותר, ההדמיה תהיה משכנעת יותר.
+          </p>
+        </div>
       </div>
 
       <div className="space-y-8">
@@ -132,6 +149,10 @@ export const BasicQuestionsStep = ({ onNext, onPrevious, initialAnswers, userPho
             
             {errors[question.id] && (
               <p className="text-sm text-destructive">{errors[question.id]}</p>
+            )}
+            
+            {question.hint && (
+              <p className="text-xs text-muted-foreground" dir="rtl">{question.hint}</p>
             )}
           </div>
         ))}

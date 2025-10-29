@@ -46,12 +46,16 @@ let pdfParse = null;
 const loadPdfParse = async () => {
     if (!pdfParse) {
         try {
-            const pdfParseModule = await Promise.resolve().then(() => __importStar(require('pdf-parse')));
-            pdfParse = pdfParseModule.default || pdfParseModule;
+            const mod = await Promise.resolve().then(() => __importStar(require('pdf-parse')));
+            pdfParse = typeof mod === 'function' ? mod : (typeof mod?.default === 'function' ? mod.default : null);
         }
         catch (e) {
-            pdfParse = require('pdf-parse').default || require('pdf-parse');
+            const modCjs = require('pdf-parse');
+            pdfParse = typeof modCjs === 'function' ? modCjs : (typeof modCjs?.default === 'function' ? modCjs.default : null);
         }
+    }
+    if (typeof pdfParse !== 'function') {
+        throw new Error('pdf-parse module did not export a function');
     }
     return pdfParse;
 };
@@ -182,6 +186,87 @@ class ChatController {
             const uploadedFile = req.file;
             const pdfBuffer = uploadedFile.buffer;
             const originalName = uploadedFile.originalname || 'document.pdf';
+            const LLAMAINDEX_API_KEY = 'llx-p1rqcgG6HbG31MZU6zpip5BYpF95ckuNtliioEHWP8CZfVeG';
+            const LLAMAINDEX_BASE_URL = 'https://api.llamaindex.ai';
+            if (LLAMAINDEX_API_KEY && LLAMAINDEX_BASE_URL) {
+                try {
+                    const liForm = new form_data_1.default();
+                    liForm.append('file', pdfBuffer, {
+                        filename: originalName,
+                        contentType: 'application/pdf',
+                    });
+                    const liUrl = `${LLAMAINDEX_BASE_URL}/api/parsing/upload`;
+                    const liResp = await axios_1.default.post(liUrl, liForm, {
+                        headers: {
+                            ...liForm.getHeaders(),
+                            Authorization: `Bearer ${LLAMAINDEX_API_KEY}`,
+                        },
+                        timeout: 120000,
+                        maxBodyLength: Infinity,
+                    });
+                    try {
+                        const preview = JSON.stringify(liResp.data).slice(0, 1500);
+                        console.debug(`[LlamaParse] upload response (preview): ${preview}`);
+                    }
+                    catch { }
+                    const jobId = (liResp.data?.id || liResp.data?.job?.id || liResp.data?.job_id || '').toString();
+                    if (jobId) {
+                        const pollUrl = `${LLAMAINDEX_BASE_URL}/api/parsing/jobs/${jobId}`;
+                        const startTs = Date.now();
+                        let lastState;
+                        while (Date.now() - startTs < 120000) {
+                            const jr = await axios_1.default.get(pollUrl, {
+                                headers: { Authorization: `Bearer ${LLAMAINDEX_API_KEY}` },
+                                timeout: 15000,
+                            });
+                            const data = jr.data || {};
+                            try {
+                                const preview = JSON.stringify(data).slice(0, 2000);
+                                console.debug(`[LlamaParse] poll state preview: ${preview}`);
+                            }
+                            catch { }
+                            const state = (data.state || data.status || '').toString().toUpperCase();
+                            lastState = state;
+                            if (state === 'SUCCESS' || state === 'SUCCEEDED' || state === 'COMPLETED') {
+                                const candidates = [
+                                    data.text,
+                                    data.output,
+                                    data.result?.text,
+                                    data.result?.output,
+                                    Array.isArray(data.pages) ? data.pages.map((p) => p.text).join('\n\n') : undefined,
+                                    Array.isArray(data.documents) ? data.documents.map((d) => d.text || d.content).join('\n\n') : undefined,
+                                ];
+                                const joined = candidates
+                                    .filter((v) => typeof v === 'string' && v.trim().length > 0)
+                                    .map((v) => v.trim());
+                                const liText = (joined[0] || '').toString().trim();
+                                if (liText.length > 0) {
+                                    res.json({ success: true, text: liText, pages: 0 });
+                                    return;
+                                }
+                                break;
+                            }
+                            if (state === 'FAILED' || state === 'ERROR' || state === 'CANCELLED') {
+                                break;
+                            }
+                            await new Promise((r) => setTimeout(r, 1500));
+                        }
+                        if (lastState && lastState !== 'SUCCESS' && lastState !== 'SUCCEEDED' && lastState !== 'COMPLETED') {
+                            console.warn(`LlamaParse job ${jobId} ended without success (state=${lastState})`);
+                        }
+                    }
+                    else {
+                        const liTextImmediate = (liResp.data?.text || liResp.data?.output || '').toString().trim();
+                        if (liTextImmediate && liTextImmediate.length > 0) {
+                            res.json({ success: true, text: liTextImmediate, pages: 0 });
+                            return;
+                        }
+                    }
+                }
+                catch (e) {
+                    console.warn('LlamaParse failed, will try pdf-parse/OCR as fallback');
+                }
+            }
             try {
                 const pdfParser = await loadPdfParse();
                 const parsed = await pdfParser(pdfBuffer);
@@ -279,25 +364,37 @@ class ChatController {
                 }
             }
             if (!resolvedSystemPrompt) {
-                const def = await this.supabaseService.getDefaultSystemPrompt();
-                if (def?.prompt) {
-                    resolvedSystemPrompt = def.prompt;
-                }
+                resolvedSystemPrompt = 'אתה סוכנת AI חכמה ומועילה. ענה בעברית בצורה ברורה וידידותית.';
             }
-            const prompt = `בהתבסס על ה-System Prompt הבא של הסוכנת, צור 5-8 שאלות מותאמות שיסייעו להשלים System Prompt מדויק לעסק:
+            const prompt = `אתה מומחה ביצירת שאלות מותאמות לסוכנות AI.
 
------- System Prompt (הקשר) ------
-${resolvedSystemPrompt || 'אתה סוכנת AI חכמה ומועילה. ענה בעברית בצורה ברורה וידידותית.'}
-----------------------------------
-מטרה שלך היא ליצור לי סיסטם פרומפט לשיחת הדמיה עם סוכן ללקוח : זה המבנה של הסיסטם פרומםט : בס״ד ======================== 🤖 תפקיד הסוכנת ======================== את עמית – סוכנת AI חכמה ומנומסת מטעם העסק פלאפון. המטרה שלך: לשוחח בצורה טבעית, לגלות באיזה רשת הלקוח מנוי, אם הוא לקוח קיים של פלאפון : לשאול אותו האם הוא מעוניין להוסיף קווים או לשנות מסלולים בלבד ======================== 🏢 פרטי העסק ======================== שם העסק: פלאפון תחום הפעילות:שירות קווי סלולר מה העסק מציע: שירותי קווי סלולר קהל יעד: מבוגרים גילאי 18+ אודות העסק : העסק עובד משנת 2014 שנים נותני שירות מהלב באיכות גבוהה ובמקצועיות — ======= נתונים שצריך לגלות בשאלות : 1. כמה קווים אתה מחזיק היום? 2. באיזו רשת אתה מנוי כיום? 3. אתה מעוניין במסלול דור 4 או דור 5? 4. תשאל שאלה שתגלה אם הלקוח קונה לפי מחיר בצורה אינטיליגנטית במידה והלקוח מעוניין להעביר אותו להקמת הזמנה על ידיד מנהל תיק לקוח ======================== לשאול את כל השאלות אחת אחריה שניה ולא ביחד ======================== 💬 סגנון הדמות ======================== 🗣️ טון דיבור: קליל / מקצועי 📝 סגנון כתיבה: קצר וברור 🌍 שפה: עברית ❤️ ערכי העסק: אמינות / יחס אישי / איכות / --- ======================== 🎯 מטרות השיחה ======================== 1. לזהות מה הלקוח מחפש. 2. לתת מידע מדויק וברור. 3. לבנות אמון ועניין. 4. להוביל לפעולה רכה ומותאמת (CTA). --- ======================== 📜 תסריט בסיסי ======================== 👋 פתיחה: "היי! אני {שם הסוכנת} מ-{שם העסק} 😊 איך אפשר לעזור לך היום?" במידה והלקוח מעוניין בעסקה לא להציע פיתרון לפני ששאלת לפחות 3 שאלות כדי להבין את הצורך 💡 הצעת פתרון: "נשמע שזה בדיוק מה שאנחנו עושים! אסביר בקצרה איך זה עובד אצלנו." 📅 קריאה לפעולה: יאללה סגרנו. --- ======================== 🤖 כללי בינה ======================== - תשמרי על זרימה טבעית, בלי לחזור על עצמך. - אם הלקוח קצר – תעני בקצרה. אם מפורט – תתאימי את עצמך. - אם כבר יש פרטים עליו, תשתמשי בהם. - אם הוא מתנגד – תתייחסי בעדינות ואל תילחצי למכור. - תמיד תשמרי על שפה אנושית, קלילה ומזמינה. - לשאול רק שאלה אחת בכל הודעה ✅ מטרה סופית: שהשיחה תרגיש אנושית, חכמה ומקדמת - כאילו מדובר בנציגה אמיתית. שאל אותי 5 - 8 שאלות כדי לייצר לי סיסטם פרומפט מתאים לעסק חדש - חובה לשאול שם ומגדר של הסוכן
 פרטים שנאספו מהמשתמש:
 שם העסק: ${businessName}
 תחום העסק: ${businessField}
 מטרת הסוכן: ${businessGoal}
 
+על סמך הפרטים האלה, שאל בדיוק 6-8 שאלות נוספות כדי להשלים את הסיסטם פרומפט.
 
-- בין 5 ל-8 שאלות בסך הכול`;
-            const response = await this.aiService.generateResponse([{ role: 'user', content: prompt }], { temperature: 0.7, maxTokens: 500, systemPrompt: resolvedSystemPrompt });
+🚨 חשוב מאוד: אתה חייב לשאול לפחות 6 שאלות, לא פחות! בין 6 ל-8 שאלות בסך הכול.
+
+השאלות צריכות להיות מפורטות וממוקדות, עם דוגמאות ספציפיות:
+
+1. **שם הסוכן ומגדר** - שאל על שם ומגדר (זכר/נקבה) עם דוגמאות כמו "איך הסוכן יקרא לעצמו? (דוגמה: דנה, עמית, רון)"
+
+2. **תכונות אופי ספציפיות** - שאל על תכונות אופי רלוונטיות לתחום עם דוגמאות כמו "איך הסוכן צריך להתנהג? (דוגמה: מקצועי, ידידותי, סבלני)"
+
+3. **סגנון תקשורת מפורט** - שאל על סגנון דיבור עם דוגמאות כמו "איך הסוכן צריך לדבר? (דוגמה: קליל, מקצועי, עם סלנג ישראלי)"
+
+4. **תהליכי עבודה ספציפיים** - שאל על מה לעשות במקרים קשים עם דוגמאות כמו "מה לעשות כשלקוח כועס? (דוגמה: להקשיב, להתנצל, להציע פתרון)"
+
+5. **מגבלות ואזהרות** - שאל על מה לא לדבר עליו עם דוגמאות כמו "מה אסור לדבר עליו? (דוגמה: מחירים של מתחרים, מידע אישי)"
+
+6. **דוגמאות מעשיות** - שאל על דוגמאות לפתיחה עם דוגמאות כמו "איך הסוכן יפתח שיחה? (דוגמה: 'היי! איך אפשר לעזור?')"
+
+⚠️ אם תשאל פחות מ-6 שאלות, התשובה שלך לא תתקבל!
+
+השאלות צריכות להיות מותאמות לתחום העסק: ${businessField}`;
+            const response = await this.aiService.generateResponse([{ role: 'user', content: prompt }], { temperature: 0.7, maxTokens: 500, systemPrompt: resolvedSystemPrompt }, false);
             const questions = response.content
                 .split('\n')
                 .map(q => q.trim())
@@ -317,22 +414,47 @@ ${resolvedSystemPrompt || 'אתה סוכנת AI חכמה ומועילה. ענה 
                 res.status(400).json({ success: false, error: 'Answers are required' });
                 return;
             }
-            const prompt = `אתה מומחה ביצירת סיסטם פרומפטים לסוכנות AI. 
+            const pdfPrefix = 'תוכן מקובץ PDF:';
+            const userAnswers = [];
+            const pdfChunks = [];
+            for (const a of answers) {
+                if (typeof a === 'string' && a.trim().startsWith(pdfPrefix)) {
+                    const onlyText = a.replace(pdfPrefix, '').trim();
+                    if (onlyText)
+                        pdfChunks.push(onlyText);
+                }
+                else {
+                    userAnswers.push(a);
+                }
+            }
+            const pdfSection = pdfChunks.length > 0
+                ? `\n\nקונטקסט נוסף מה-PDF (תוספת בלבד, לא במקום תשובות המשתמש):\n${pdfChunks.join('\n')}\n\n`
+                : '\n';
+            const prompt = `אתה מומחה ביצירת סיסטם פרומפטים לסוכנות AI.
 
-תבסס על התשובות הבאות, צור סיסטם פרומפט מקצועי:
-${answers.join('\n')}
+תבסס על התשובות הבאות וצור סיסטם פרומפט מקצועי:
+${userAnswers.join('\n')}
+${pdfSection}
+חשוב מאוד:
+- התוכן מה-PDF הוא תוספת בלבד. אם קיים פער מול תשובות המשתמש, עדיפות מוחלטת לתשובות המשתמש.
+- אל תחליף או תסיר פרטים מהתשובות; רק העשר בעזרת ה-PDF.
 
-הסיסטם פרומפט צריך לכלול:
-1. תפקיד הסוכנת
-2. פרטי העסק
-3. קהל יעד
-4. סגנון דיבור
-5. מטרות השיחה
-6. כללי ברזל
-7. מה לעשות ומה לא
+צור סיסטם פרומפט שכולל:
+1. **זהות הסוכן** - שם, מגדר, תכונות אופי
+2. **תפקיד ומטרה** - מה הסוכן עושה ומה המטרה
+3. **סגנון תקשורת** - איך לדבר עם הלקוח (חשוב: פנה ללקוח בלשון המתאימה למגדר שלו)
+4. **הנחיות עבודה** - איך לטפל במקרים שונים
+5. **מגבלות** - מה לא לדבר עליו
+6. **דוגמאות והנחיות מעשיות** -
+   - פתיחות שיחה, תגובות לדוגמא, ותסריטי שיחה מעשיים.
+   - אם בקונטקסט ה-PDF קיימים "תרחישי שיחה"/"תסריטים"/"סקריפטים" — שלב אותם כאן באופן מסודר ומדויק (רשימות ממוספרות, כותרות קצרות), בלי למחוק פרטים מהתשובות. אם צריך, תמצת משפטית לשמירה על בהירות.
 
-ענה רק עם הסיסטם פרומפט, ללא הסבר נוסף.`;
-            const response = await this.aiService.generateResponse([{ role: 'user', content: prompt }], { temperature: 0.7, maxTokens: 2000 });
+**חשוב:** השתמש במידע מהתשובות. אם מידע חסר, השתמש בערכים כלליים ומקצועיים.
+**חשוב מאוד:** פנה ללקוח בלשון המתאימה למגדר שלו (זכר/נקבה) כפי שצוין בתשובות.
+**לגבי תרחישי שיחה מה-PDF:** אם נמצאו, שלב אותם תחת סעיף 6 כדוגמאות ותסריטים קונקרטיים (כולל וריאציות, התנגדויות נפוצות ומענה מומלץ), תוך התאמה לסגנון התקשורת שצוין.
+
+ענה רק עם הסיסטם פרומפט המלא, ללא הסבר נוסף.`;
+            const response = await this.aiService.generateResponse([{ role: 'user', content: prompt }], { temperature: 0.7, maxTokens: 8000 }, false);
             const generatedPrompt = response.content;
             const created = await this.supabaseService.createCustomSystemPrompt(generatedPrompt, userPhone);
             if (created && userPhone) {

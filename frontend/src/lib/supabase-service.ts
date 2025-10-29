@@ -5,6 +5,7 @@ export class SupabaseService {
   async createUser(userData: {
     phone_number: string;
     name?: string;
+    customer_gender?: string;
   }): Promise<User | null> {
     try {
       const { data, error } = await supabase
@@ -12,6 +13,7 @@ export class SupabaseService {
         .insert({
           phone_number: userData.phone_number,
           name: userData.name || null,
+          customer_gender: userData.customer_gender || null,
         })
         .select()
         .single();
@@ -44,6 +46,44 @@ export class SupabaseService {
       return data;
     } catch (error) {
       console.error('Error in getUserByPhone:', error);
+      return null;
+    }
+  }
+
+  async upsertUser(userData: {
+    phone_number: string;
+    name?: string;
+    customer_gender?: string;
+  }): Promise<User | null> {
+    try {
+      // First, try to get existing user
+      const existingUser = await this.getUserByPhone(userData.phone_number);
+      
+      if (existingUser) {
+        // Update existing user
+        const { data, error } = await supabase
+          .from('users')
+          .update({
+            name: userData.name || existingUser.name,
+            customer_gender: userData.customer_gender || existingUser.customer_gender,
+            updated_at: new Date().toISOString()
+          })
+          .eq('phone_number', userData.phone_number)
+          .select()
+          .single();
+
+        if (error) {
+          console.error('Error updating user:', error);
+          return existingUser; // Return existing user even if update fails
+        }
+
+        return data;
+      } else {
+        // Create new user
+        return await this.createUser(userData);
+      }
+    } catch (error) {
+      console.error('Error in upsertUser:', error);
       return null;
     }
   }

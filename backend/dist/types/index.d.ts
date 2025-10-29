@@ -18,6 +18,7 @@ export interface ChatRequest {
     systemPrompt?: string;
     userEmail?: string;
     userPhone?: string;
+    customerGender?: string;
 }
 export interface ChatResponse {
     message: Message;

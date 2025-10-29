@@ -4,12 +4,13 @@ import { PersonalInfoStep } from "@/components/PersonalInfoStep";
 import { BasicQuestionsStep } from "@/components/BasicQuestionsStep";
 import { DynamicQuestionsStep } from "@/components/DynamicQuestionsStep";
 import { ResultStep } from "@/components/ResultStep";
-import { Sparkles } from "lucide-react";
-import optiveLogo from "@/assets/optive-logo.png";
+import ShaderBackground from "@/components/ui/shader-background";
 
 interface PersonalInfo {
   name: string;
   phone: string;
+  businessName: string;
+  customerGender: string;
 }
 
 interface BasicAnswers {
@@ -22,7 +23,12 @@ const STEP_NAMES = ["פרטים אישיים", "פרטי העסק", "שאלות 
 
 const Index = () => {
   const [currentStep, setCurrentStep] = useState(0);
-  const [personalInfo, setPersonalInfo] = useState<PersonalInfo>({ name: "", phone: "" });
+  const [personalInfo, setPersonalInfo] = useState<PersonalInfo>({ 
+    name: "", 
+    phone: "", 
+    businessName: "", 
+    customerGender: "" 
+  });
   const [basicAnswers, setBasicAnswers] = useState<BasicAnswers>({ 
     businessName: "", 
     businessField: "", 
@@ -59,7 +65,7 @@ const Index = () => {
 
   const handleRestart = () => {
     setCurrentStep(0);
-    setPersonalInfo({ name: "", phone: "" });
+    setPersonalInfo({ name: "", phone: "", businessName: "", customerGender: "" });
     setBasicAnswers({ businessName: "", businessField: "", businessGoal: "" });
     setGeneratedPrompt("");
     setSystemPromptId("");
@@ -67,33 +73,33 @@ const Index = () => {
 
   return (
     <div className="min-h-screen relative overflow-hidden">
-      {/* Background Image */}
-      <div 
-        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-        style={{
-          backgroundImage: `url(${optiveLogo})`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center'
-        }}
-      />
+      {/* Animated Shader Background */}
+      <ShaderBackground />
       
-      {/* Dark Overlay */}
-      <div className="absolute inset-0 bg-black/50" />
+      {/* Subtle Dark Overlay for better text readability */}
+      <div className="absolute inset-0 bg-black/30" />
 
       <div className="relative z-10 container mx-auto px-4 py-8 md:py-16">
         {/* Header */}
         <div className="text-center mb-16 animate-in fade-in slide-in-from-top duration-700">
           <div className="mb-8 flex justify-center">
+            <img 
+              src="https://res.cloudinary.com/daowx6msw/image/upload/v1761607495/white_logogg_uf3usn.png" 
+              alt="Optive Logo" 
+              className="h-40 md:h-52 w-auto object-contain"
+            />
           </div>
-          <div className="inline-flex items-center gap-2 bg-primary/10 text-primary px-4 py-2 rounded-full mb-4 backdrop-blur-sm border border-primary/20">
-            <Sparkles className="w-4 h-4" />
-            <span className="text-sm font-medium">Optive-LDT AI System Prompt Generator</span>
-          </div>
-          <h1 className="text-4xl md:text-6xl font-bold mb-4 bg-gradient-to-r from-primary via-accent to-primary-glow bg-clip-text text-transparent">
-            יצירת System Prompt מותאם אישית
+          <h1 className="text-4xl md:text-6xl font-bold mb-4" style={{ fontFamily: "'Rubik', sans-serif" }}>
+            <span className="text-white">ברוך הבא למערכת ההדמיות של </span>
+            <span className="relative inline-block px-8">
+              <span className="relative z-10 bg-gradient-to-r from-purple-600 via-purple-500 to-purple-700 bg-clip-text text-transparent font-extrabold tracking-wide">
+                Optive
+              </span>
+              <span className="absolute inset-0 blur-xl bg-gradient-to-r from-purple-600/40 via-purple-500/40 to-purple-700/40 animate-pulse"></span>
+            </span>
           </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto" dir="rtl">
-            ענה על כמה שאלות קצרות ונייצר עבורך פרומפט מותאם במיוחד לצרכים שלך
+          <p className="text-lg text-white/80 max-w-2xl mx-auto" dir="rtl" style={{ fontFamily: "'Rubik', sans-serif" }}>
+            הדמיה חיה שהופכת כל שיחה לעסקה - תן ללקוחות שלך להתנסות במוצר לפני שהם קונים
           </p>
         </div>
 
@@ -121,6 +127,7 @@ const Index = () => {
               onPrevious={handlePrevious}
               basicAnswers={basicAnswers}
               userPhone={personalInfo.phone}
+              customerGender={personalInfo.customerGender}
             />
           )}
 

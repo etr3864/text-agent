@@ -38,12 +38,15 @@ const wasender_service_js_1 = require("../services/wasender.service.js");
 const supabase_service_js_1 = require("../services/supabase.service.js");
 const ai_service_js_1 = require("../services/ai.service.js");
 const media_service_js_1 = require("../services/media.service.js");
+const conversation_service_js_1 = require("../services/conversation.service.js");
 class WhatsAppController {
     constructor() {
         this.supabase = new supabase_service_js_1.SupabaseService();
         this.aiService = new ai_service_js_1.AIService();
+        this.conversationService = new conversation_service_js_1.ConversationService();
+        this.conversationIds = new Map();
         this.messageBuffers = new Map();
-        this.DEBOUNCE_DELAY = 5000;
+        this.DEBOUNCE_DELAY = 10000;
     }
     async processMessageWithDebounce(senderPhone, text, userName, timestamp, audioUrl, imageUrl, audioMediaKey, imageMediaKey) {
         let buffer = this.messageBuffers.get(senderPhone);
@@ -103,8 +106,18 @@ class WhatsAppController {
                     return;
                 }
                 const systemPrompt = userWithPrompt?.systemPrompt?.prompt;
-                const aiResponse = await this.aiService.generateResponse([{ role: 'user', content: combinedText }], systemPrompt ? { systemPrompt } : undefined);
-                const replyText = aiResponse?.content?.trim();
+                let conversationId = this.conversationIds.get(senderPhone);
+                const conversationResponse = await this.conversationService.sendMessage({
+                    message: combinedText,
+                    userPhone: senderPhone,
+                    conversationId: conversationId,
+                    systemPrompt: systemPrompt,
+                    customerGender: userWithPrompt?.user?.customer_gender || undefined
+                });
+                if (conversationResponse?.conversationId) {
+                    this.conversationIds.set(senderPhone, conversationResponse.conversationId);
+                }
+                const replyText = conversationResponse?.message?.content?.trim();
                 if (replyText && replyText.length > 0) {
                     await wasender_service_js_1.wasenderService.sendMessage(senderPhone, replyText);
                     if (userWithPrompt?.user?.id) {
@@ -351,16 +364,23 @@ class WhatsAppController {
                 res.status(400).json({ success: false, error: 'Invalid phone number after normalization' });
                 return;
             }
-            let messageText = text;
-            if (!messageText) {
-                const userByPhone = await this.supabase.getUserByPhone(phoneNumber);
-                const displayName = (userByPhone?.name || userName || '').trim();
-                const businessName = (userByPhone?.business_name || userBusinessName || '').trim();
-                const helloPart = displayName ? `היי ${displayName}` : 'היי';
-                const businessPart = businessName ? ` מ${businessName}` : '';
-                messageText = `${helloPart} אני דנה${businessPart} 😊מתחילים שיחת הדמייה`;
+            const existingUser = await this.supabase.getUserByPhone(phoneNumber);
+            if (existingUser && (existingUser.whatsapp_status === 'sent' || existingUser.first_message_sent_at)) {
+                res.json({ success: true, message: 'First message already sent previously' });
+                return;
             }
-            const wasenderResponse = await wasender_service_js_1.wasenderService.sendMessage(phoneNumber, messageText);
+            const userWithPrompt = await this.supabase.getUserWithSystemPromptByPhone(phoneNumber);
+            const systemPrompt = userWithPrompt?.systemPrompt?.prompt || systemPromptText;
+            const agentName = this.extractAgentName(systemPrompt);
+            const customerName = userName || userBusinessName || undefined;
+            let firstMessage = '';
+            if (customerName) {
+                firstMessage = `היי ${customerName} אני ${agentName} מתחילים שיחת הדמייה`;
+            }
+            else {
+                firstMessage = `היי אני ${agentName} מתחילים שיחת הדמייה`;
+            }
+            const wasenderResponse = await wasender_service_js_1.wasenderService.sendMessage(phoneNumber, firstMessage);
             if (!wasenderResponse.success) {
                 res.status(502).json({ success: false, error: 'Failed to send via Wasender', details: wasenderResponse.error });
                 return;
@@ -369,12 +389,31 @@ class WhatsAppController {
             if (user) {
                 await this.supabase.updateUserWhatsAppStatus(user.id, 'sent');
             }
-            res.json({ success: true, message: 'First message sent successfully', wasenderResponse });
+            res.json({ success: true, message: 'First message sent successfully via AI' });
         }
         catch (error) {
             console.error('Error in sendFirstMessage:', error);
             res.status(500).json({ success: false, error: 'Internal server error' });
         }
+    }
+    extractAgentName(systemPrompt) {
+        if (!systemPrompt)
+            return 'נועה';
+        const lines = systemPrompt.split('\n').map(l => l.trim()).filter(Boolean);
+        const text = lines.join(' ');
+        const patterns = [
+            /שמי\s+([\u0590-\u05FFA-Za-z"']{2,30})/,
+            /אני\s+([\u0590-\u05FFA-Za-z"']{2,30})/,
+            /הסוכנת\s+([\u0590-\u05FFA-Za-z"']{2,30})/,
+            /שם\s+הסוכנ[ת]\s*[:\-]?\s*([\u0590-\u05FFA-Za-z"']{2,30})/
+        ];
+        for (const re of patterns) {
+            const m = text.match(re);
+            if (m && m[1]) {
+                return m[1].replace(/["']/g, '').trim();
+            }
+        }
+        return 'נועה';
     }
     async stopSimulation(req, res) {
         try {

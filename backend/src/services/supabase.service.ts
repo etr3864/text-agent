@@ -23,6 +23,7 @@ export interface User {
   whatsapp_status: string | null;
   first_message_sent_at: string | null;
   last_message_at: string | null;
+  customer_gender: string | null;
 }
 
 export class SupabaseService {
@@ -350,6 +351,29 @@ export class SupabaseService {
       return true;
     } catch (error) {
       console.error('Error in updateUserWhatsAppStatus:', error);
+      return false;
+    }
+  }
+
+  // איפוס סטטוס WhatsApp למשתמש (להתחלת הדמיה חדשה)
+  async resetUserSimulationStatus(userId: string): Promise<boolean> {
+    try {
+      const { error } = await this.supabase
+        .from('users')
+        .update({ 
+          whatsapp_status: null,
+          first_message_sent_at: null 
+        })
+        .eq('id', userId);
+
+      if (error) {
+        console.error('Error resetting user simulation status:', error);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error in resetUserSimulationStatus:', error);
       return false;
     }
   }

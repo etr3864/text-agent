@@ -2,19 +2,21 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronRight } from "lucide-react";
 import { apiService } from "@/lib/api";
 
 interface PersonalInfoStepProps {
-  onNext: (data: { name: string; phone: string; businessName: string }) => void;
-  initialData?: { name: string; phone: string; businessName: string };
+  onNext: (data: { name: string; phone: string; businessName: string; customerGender: string }) => void;
+  initialData?: { name: string; phone: string; businessName: string; customerGender: string };
 }
 
 export const PersonalInfoStep = ({ onNext, initialData }: PersonalInfoStepProps) => {
   const [formData, setFormData] = useState({
     name: initialData?.name || "",
-    phone: initialData?.phone || "",
+    phone: initialData?.phone || "972",
     businessName: initialData?.businessName || "",
+    customerGender: initialData?.customerGender || "",
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -27,10 +29,14 @@ export const PersonalInfoStep = ({ onNext, initialData }: PersonalInfoStepProps)
       newErrors.name = "שם הוא שדה חובה";
     }
     
-    if (!formData.phone.trim()) {
+    if (!formData.phone.trim() || formData.phone === '972') {
       newErrors.phone = "מספר WhatsApp הוא שדה חובה";
-    } else if (!/^972[0-9]{8,9}$/.test(formData.phone)) {
-      newErrors.phone = "פורמט WhatsApp לא תקין (דוגמה: 972509039899)";
+    } else if (!/^972[0-9]{9}$/.test(formData.phone.trim())) {
+      newErrors.phone = "מספר לא תקין - נדרשים 9 ספרות אחרי 972";
+    }
+    
+    if (!formData.customerGender) {
+      newErrors.customerGender = "מגדר הלקוח הוא שדה חובה";
     }
     
     setErrors(newErrors);
@@ -45,7 +51,8 @@ export const PersonalInfoStep = ({ onNext, initialData }: PersonalInfoStepProps)
         // Create user in backend
         await apiService.createUser({
           phone_number: formData.phone,
-          name: formData.name
+          name: formData.name,
+          customer_gender: formData.customerGender
         });
         onNext(formData);
       } catch (error) {
@@ -66,31 +73,63 @@ export const PersonalInfoStep = ({ onNext, initialData }: PersonalInfoStepProps)
       )}
 
       <div className="space-y-2">
-        <Label htmlFor="name" className="text-foreground">שם מלא *</Label>
+        <Label htmlFor="name" className="text-foreground">שם הלקוח שלך *</Label>
         <Input
           id="name"
           value={formData.name}
           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          placeholder="הכנס מספר לקוח"
+          placeholder="לדוגמה: דני כהן"
           className={errors.name ? "border-destructive" : ""}
           dir="rtl"
         />
         {errors.name && <p className="text-sm text-destructive">{errors.name}</p>}
+        <p className="text-xs text-muted-foreground">👤 שם הלקוח שתשלח לו את ההדמיה</p>
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="phone" className="text-foreground">מספר WhatsApp *</Label>
-        <Input
-          id="phone"
-          type="text"
-          value={formData.phone}
-          onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-          placeholder="972509039899"
-          className={errors.phone ? "border-destructive" : ""}
-          dir="ltr"
-        />
+        <Label htmlFor="phone" className="text-foreground">WhatsApp של הלקוח *</Label>
+        <div className="relative">
+          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-mono pointer-events-none">
+            972
+          </div>
+          <Input
+            id="phone"
+            type="text"
+            value={formData.phone.startsWith('972') ? formData.phone.slice(3) : formData.phone}
+            onChange={(e) => {
+              let value = e.target.value.replace(/\D/g, '');
+              // אם המשתמש הכניס 0 בתחילה, מסיר אותו
+              if (value.startsWith('0')) {
+                value = value.slice(1);
+              }
+              setFormData({ ...formData, phone: '972' + value });
+            }}
+            placeholder="509039899 או 0509039899"
+            className={`pl-14 ${errors.phone ? "border-destructive" : ""}`}
+            dir="ltr"
+            maxLength={10}
+          />
+        </div>
         {errors.phone && <p className="text-sm text-destructive">{errors.phone}</p>}
-        <p className="text-xs text-muted-foreground">📱 פורמט WhatsApp לשליחת הודעות</p>
+        <p className="text-xs text-muted-foreground">📱 הלקוח יקבל את ההדמיה בווטסאפ במספר הזה</p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="customerGender" className="text-foreground">מגדר הלקוח *</Label>
+        <Select
+          value={formData.customerGender}
+          onValueChange={(value) => setFormData({ ...formData, customerGender: value })}
+        >
+          <SelectTrigger className={errors.customerGender ? "border-destructive" : ""} dir="rtl">
+            <SelectValue placeholder="בחר מגדר" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="זכר">זכר</SelectItem>
+            <SelectItem value="נקבה">נקבה</SelectItem>
+          </SelectContent>
+        </Select>
+        {errors.customerGender && <p className="text-sm text-destructive">{errors.customerGender}</p>}
+        <p className="text-xs text-muted-foreground">💬 הסוכן יפנה ללקוח בלשון המתאימה</p>
       </div>
 
       <Button type="submit" className="w-full group" variant="default" disabled={isLoading}>

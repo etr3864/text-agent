@@ -77,11 +77,25 @@ class ConversationService {
                     }
                 }
             }
-            const aiResponse = await this.aiService.generateResponse(messagesForAI, systemPromptToUse ? { systemPrompt: systemPromptToUse } : undefined);
+            if (request.customerGender && systemPromptToUse) {
+                const genderInstruction = `\n\n**מידע חשוב על הלקוח:** הלקוח הוא ${request.customerGender}. פנה אליו בלשון המתאימה למגדר שלו.`;
+                systemPromptToUse += genderInstruction;
+            }
+            const aiResponse = await this.aiService.generateResponse(messagesForAI, systemPromptToUse ? { systemPrompt: systemPromptToUse } : undefined, true);
+            const isFirstAgentResponse = conversation.messages.length === 1;
+            let cleanedContent = aiResponse.content;
+            if (!isFirstAgentResponse) {
+                cleanedContent = cleanedContent
+                    .replace(/שלום[,\s]*/gi, '')
+                    .replace(/היי[!,\s]*/gi, '')
+                    .replace(/אני דנה[,\s]*/gi, '')
+                    .replace(/^[,\s]+/, '')
+                    .trim();
+            }
             const assistantMessage = {
                 id: (0, uuid_1.v4)(),
                 role: 'assistant',
-                content: aiResponse.content,
+                content: cleanedContent,
                 timestamp: new Date(),
                 conversationId: conversation.id
             };

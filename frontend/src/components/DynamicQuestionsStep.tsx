@@ -15,6 +15,7 @@ interface DynamicQuestionsStepProps {
   };
   initialAnswers?: string[];
   userPhone: string;
+  customerGender: string;
 }
 
 export const DynamicQuestionsStep = ({ 
@@ -22,7 +23,8 @@ export const DynamicQuestionsStep = ({
   onPrevious, 
   basicAnswers, 
   initialAnswers = [],
-  userPhone
+  userPhone,
+  customerGender
 }: DynamicQuestionsStepProps) => {
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<string[]>([]);
@@ -111,6 +113,7 @@ export const DynamicQuestionsStep = ({
         `שם העסק: ${basicAnswers.businessName}`,
         `תחום עיסוק: ${basicAnswers.businessField}`,
         `מטרת הסוכן: ${basicAnswers.businessGoal}`,
+        `מגדר הלקוח: ${customerGender}`,
         ...answers.map((answer, index) => `שאלה מותאמת ${index + 1}: ${answer}`)
       ];
 
@@ -254,7 +257,7 @@ export const DynamicQuestionsStep = ({
                   תוכן הקובץ:
                 </p>
                 <p className="text-sm text-blue-600 dark:text-blue-400 max-h-32 overflow-y-auto">
-                  {pdfText.substring(0, 200)}...
+                  {pdfText}
                 </p>
               </div>
             )}

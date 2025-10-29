@@ -64,3 +64,5 @@ export class WhatsAppDecrypt {
     return Buffer.concat(result).slice(0, length);
   }
 }
+
+

@@ -7,6 +7,9 @@ export class ConversationService {
   private conversations: Map<string, Conversation> = new Map();
   private aiService: AIService;
   private supabaseService: SupabaseService;
+  
+  // הגבלת קונטקסט ל-35 הודעות אחרונות
+  private readonly MAX_MESSAGES = 35;
 
   constructor() {
     this.aiService = new AIService();
@@ -90,21 +93,50 @@ export class ConversationService {
         }
       }
 
+      // Add customer gender information to system prompt if available
+      if (request.customerGender && systemPromptToUse) {
+        const genderInstruction = `\n\n**מידע חשוב על הלקוח:** הלקוח הוא ${request.customerGender}. פנה אליו בלשון המתאימה למגדר שלו.`;
+        systemPromptToUse += genderInstruction;
+      }
+
       const aiResponse = await this.aiService.generateResponse(
         messagesForAI,
-        systemPromptToUse ? { systemPrompt: systemPromptToUse } : undefined
+        systemPromptToUse ? { systemPrompt: systemPromptToUse } : undefined,
+        true // isForWhatsApp = true
       );
+
+      // Check if this is the first response from the agent (conversation.messages.length === 1 means only user message exists)
+      const isFirstAgentResponse = conversation.messages.length === 1;
+      
+      // If this is NOT the first agent response, remove greetings from the response
+      let cleanedContent = aiResponse.content;
+      if (!isFirstAgentResponse) {
+        // Remove common greetings and agent name mentions
+        cleanedContent = cleanedContent
+          .replace(/שלום[,\s]*/gi, '') // Remove "שלום" and "שלום,"
+          .replace(/היי[!,\s]*/gi, '') // Remove "היי!" and "היי,"
+          .replace(/אני דנה[,\s]*/gi, '') // Remove "אני דנה" and "אני דנה,"
+          .replace(/^[,\s]+/, '') // Remove leading commas and spaces
+          .trim();
+      }
 
       const assistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: aiResponse.content,
+        content: cleanedContent,
         timestamp: new Date(),
         conversationId: conversation.id
       };
 
       conversation.messages.push(assistantMessage);
       conversation.updatedAt = new Date();
+      
+      // גריסת הודעות ישנות - שמירה של 35 הודעות אחרונות בלבד
+      if (conversation.messages.length > this.MAX_MESSAGES) {
+        const numToRemove = conversation.messages.length - this.MAX_MESSAGES;
+        conversation.messages.splice(0, numToRemove);
+        console.log(`🗑️  Pruned ${numToRemove} old messages. Current count: ${conversation.messages.length}`);
+      }
 
       if (conversation.messages.length === 2) {
         conversation.title = this.generateTitle(request.message);
@@ -127,7 +159,18 @@ export class ConversationService {
   }
 
   async deleteConversation(id: string): Promise<boolean> {
-    return this.conversations.delete(id);
+    const deleted = this.conversations.delete(id);
+    if (deleted) {
+      console.log(`🗑️  Deleted conversation: ${id}`);
+    }
+    return deleted;
+  }
+  
+  // מחיקת כל השיחות (שימושי לניקוי כללי)
+  async clearAllConversations(): Promise<void> {
+    const count = this.conversations.size;
+    this.conversations.clear();
+    console.log(`🗑️  Cleared all conversations (${count} total)`);
   }
 
   private generateTitle(message: string): string {

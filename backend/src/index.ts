@@ -3,19 +3,24 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
-import { config, validateConfig } from './config/env.js';
-import chatRoutes from './routes/chat.routes.js';
-import healthRoutes from './routes/health.routes.js';
-import whatsappRoutes from './routes/whatsapp.routes.js';
-import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
+import { config, validateConfig } from './config/env';
+import chatRoutes from './routes/chat.routes';
+import healthRoutes from './routes/health.routes';
+import whatsappRoutes from './routes/whatsapp.routes';
+import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 
 // Validate configuration
 validateConfig();
 
 const app = express();
 
-// Trust proxy for rate limiting
-app.set('trust proxy', true);
+// Trust proxy configuration (avoid permissive 'true')
+// In production behind a single proxy (e.g., Heroku/Render/NGINX) use 1; otherwise disable
+if (config.nodeEnv === 'production') {
+  app.set('trust proxy', 1);
+} else {
+  app.set('trust proxy', false);
+}
 
 // Security middleware
 app.use(helmet());
@@ -32,7 +37,9 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: config.apiRateLimit,
   message: 'Too many requests from this IP, please try again later.',
-  skipSuccessfulRequests: true
+  skipSuccessfulRequests: true,
+  standardHeaders: false, // Disable `RateLimit-*` headers in development
+  legacyHeaders: false // Disable `X-RateLimit-*` headers
 });
 app.use(limiter);
 

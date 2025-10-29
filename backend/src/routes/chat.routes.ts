@@ -1,5 +1,5 @@
 import express from 'express';
-import { ChatController } from '../controllers/chat.controller.js';
+import { ChatController } from '../controllers/chat.controller';
 import multer from 'multer';
 
 const router = express.Router();

@@ -40,10 +40,11 @@ class ApiService {
   async createUser(userData: {
     phone_number: string;
     name?: string;
+    customer_gender?: string;
   }) {
-    const user = await supabaseService.createUser(userData);
+    const user = await supabaseService.upsertUser(userData);
     if (!user) {
-      throw new Error('Failed to create user');
+      throw new Error('Failed to create/update user');
     }
     return { success: true, user };
   }
